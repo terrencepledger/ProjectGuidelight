@@ -2,11 +2,11 @@
   "name": "gptpresentation",
   "version": "1.0.0",
   "description": "Mission: Build a unified, intuitive desktop application for church volunteers to control all visual presentations during services — including slideshows, videos, and scripture — with minimal training and maximum reliability.",
-  "main": "main.js",
+  "main": "src/manual-image/main.js",
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo 'No tests'"
   },
   "keywords": [],
   "author": "",

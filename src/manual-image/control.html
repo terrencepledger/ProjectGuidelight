@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Manual Image Control</title>
+  <style>
+    #thumbnails { display: flex; flex-wrap: wrap; gap: 8px; }
+    #thumbnails img { width: 100px; height: 100px; object-fit: cover; cursor: pointer; border: 2px solid transparent; }
+    #thumbnails img.selected { border-color: blue; }
+  </style>
+</head>
+<body>
+  <button id="select-folder">Select Folder</button>
+  <div id="thumbnails"></div>
+  <button id="show">Show</button>
+  <script src="control.js"></script>
+</body>
+</html>
