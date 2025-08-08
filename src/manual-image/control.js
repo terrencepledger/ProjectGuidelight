@@ -1,4 +1,5 @@
 const { ipcRenderer } = require('electron');
+const { pathToFileURL } = require('url');
 
 const selectBtn = document.getElementById('select-folder');
 const thumbnails = document.getElementById('thumbnails');
@@ -10,11 +11,12 @@ selectBtn.addEventListener('click', async () => {
   const files = await ipcRenderer.invoke('pick-folder');
   files.forEach(file => {
     const img = document.createElement('img');
-    img.src = file;
+    img.src = pathToFileURL(file).href;
+    img.dataset.filePath = file;
     img.addEventListener('click', () => {
       document.querySelectorAll('#thumbnails img').forEach(el => el.classList.remove('selected'));
       img.classList.add('selected');
-      selectedImage = file;
+      selectedImage = img.dataset.filePath;
     });
     thumbnails.appendChild(img);
   });
