@@ -1,0 +1,15 @@
+{
+  "name": "guidelight",
+  "version": "1.0.0",
+  "description": "Church presentation control system for Greater Pentecostal Temple",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}

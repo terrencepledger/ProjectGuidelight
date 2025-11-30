@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Guidelight Control</title>
+  <link rel="stylesheet" href="control.css">
+</head>
+<body>
+  <div class="app-container">
+    <nav class="sidebar">
+      <ul class="nav-list">
+        <li>
+          <button class="nav-btn active" data-mode="images">Media Library</button>
+        </li>
+        <li>
+          <button class="nav-btn" data-mode="slideshow">Slideshow</button>
+        </li>
+        <li>
+          <button class="nav-btn" data-mode="scripture">Scripture</button>
+        </li>
+        <li>
+          <button class="nav-btn" data-mode="settings">Settings</button>
+        </li>
+      </ul>
+      <div class="sidebar-footer">
+        <button class="standby-btn" id="standbyBtn">STANDBY</button>
+      </div>
+    </nav>
+    
+    <main class="main-content">
+      <div class="content-area">
+        <section class="mode-panel active" data-panel="images">
+          <h2>Media Library</h2>
+          <div class="library-controls">
+            <button class="btn" id="addFolderBtn">Add Folder</button>
+            <button class="btn" id="addFilesBtn">Add Files</button>
+            <div class="filter-toggles">
+              <button class="filter-btn active" data-filter="all">All</button>
+              <button class="filter-btn" data-filter="image">Images</button>
+              <button class="filter-btn" data-filter="video">Videos</button>
+            </div>
+          </div>
+          <div class="thumbnail-grid" id="imageGrid">
+          </div>
+        </section>
+
+        <section class="mode-panel" data-panel="slideshow">
+          <h2>Slideshow</h2>
+          
+          <div class="preset-controls">
+            <select id="presetSelect" class="select-input preset-select">
+              <option value="">-- New Slideshow --</option>
+            </select>
+            <button class="btn btn-small" id="renamePresetBtn" title="Rename" disabled>✏️</button>
+            <button class="btn btn-small btn-danger" id="deletePresetBtn" title="Delete" disabled>🗑️</button>
+            <button class="btn btn-primary" id="savePresetBtn">Save</button>
+          </div>
+
+          <div class="slideshow-queue-section">
+            <div class="section-header">
+              <span>Slideshow Images</span>
+              <button class="btn btn-small" id="addToSlideshowBtn">Pick Images</button>
+            </div>
+            <div class="slideshow-queue" id="slideshowQueue">
+              <div class="empty-queue">
+                <p>No images in slideshow</p>
+                <p class="hint">Pick images from your media library</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="slideshow-settings">
+            <div class="setting-row">
+              <label>Interval</label>
+              <div class="interval-control">
+                <button class="btn btn-small" id="intervalDown">−</button>
+                <input type="number" id="intervalInput" value="7" min="1" max="60">
+                <button class="btn btn-small" id="intervalUp">+</button>
+                <span class="setting-hint">seconds</span>
+              </div>
+            </div>
+            <div class="setting-row">
+              <label>Loop</label>
+              <input type="checkbox" id="loopCheckbox" checked>
+            </div>
+            <div class="setting-row">
+              <label>Transition</label>
+              <select id="transitionSelect" class="select-input select-small">
+                <option value="none">None</option>
+                <option value="fade" selected>Fade</option>
+                <option value="slide">Slide</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="slideshow-start">
+            <button class="btn btn-primary btn-large" id="queueSlideshowBtn" disabled>Queue Slideshow</button>
+          </div>
+        </section>
+        
+        <section class="mode-panel" data-panel="scripture">
+          <h2>Scripture</h2>
+          <p class="placeholder-text">Scripture controls coming in Phase 6</p>
+        </section>
+        
+        <section class="mode-panel" data-panel="settings">
+          <h2>Settings</h2>
+          <div class="settings-group">
+            <label for="presentationMonitor">Presentation Monitor</label>
+            <select id="presentationMonitor" class="select-input">
+            </select>
+          </div>
+          <div class="settings-group">
+            <label for="scalingMode">Media Scaling</label>
+            <select id="scalingMode" class="select-input">
+              <option value="fit">Fit (letterbox)</option>
+              <option value="fill">Fill (crop)</option>
+              <option value="stretch">Stretch (distort)</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label for="standbyImagePath">Standby Image</label>
+            <div class="file-input-group">
+              <input type="text" id="standbyImagePath" readonly placeholder="No image selected">
+              <button class="btn" id="pickStandbyImage">Browse</button>
+            </div>
+          </div>
+        </section>
+      </div>
+      
+      <div class="display-area">
+        <div class="display-pane preview-pane">
+          <div class="display-label">
+            Preview
+            <button class="clear-preview-btn" id="clearPreviewBtn" title="Clear preview">×</button>
+          </div>
+          <div class="display-content" id="previewContent">
+            <span class="display-placeholder">Select content to preview</span>
+          </div>
+          <div class="display-media-name" id="previewMediaName"></div>
+          <div class="pane-transport staged-transport">
+            <div class="slideshow-banner staged-banner" id="stagedSlideshowBanner">
+              <span class="banner-indicator"></span>
+              <span>Staged</span>
+              <span class="banner-progress" id="stagedProgressText">0 / 0</span>
+            </div>
+            <div class="transport-buttons" id="stagedTransportControls">
+              <button class="btn transport-btn" id="stagedPrevBtn" title="Previous">⏮️</button>
+              <button class="btn transport-btn" id="stagedNextBtn" title="Next">⏭️</button>
+            </div>
+          </div>
+          <div class="pane-transport video-transport" id="previewVideoTransport">
+            <div class="video-scrubber">
+              <span class="video-time" id="previewVideoTime">0:00</span>
+              <input type="range" class="video-slider" id="previewVideoSlider" min="0" max="100" value="0">
+              <span class="video-duration" id="previewVideoDuration">0:00</span>
+            </div>
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="previewVideoPlayBtn" title="Play/Pause">▶️</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="display-controls">
+          <button class="go-live-btn" id="goLiveBtn" disabled>Push Live →</button>
+        </div>
+        
+        <div class="display-pane live-pane">
+          <div class="display-label">Live</div>
+          <div class="display-content" id="liveContent">
+            <span class="display-placeholder">Standby</span>
+          </div>
+          <div class="display-media-name" id="liveMediaName"></div>
+          <div class="pane-transport live-transport">
+            <div class="slideshow-banner live-banner" id="liveSlideshowBanner">
+              <span class="banner-indicator"></span>
+              <span>Live</span>
+              <span class="banner-progress" id="liveProgressText">0 / 0</span>
+            </div>
+            <div class="transport-buttons" id="liveTransportControls">
+              <button class="btn transport-btn" id="livePrevBtn" title="Previous">⏮️</button>
+              <button class="btn transport-btn" id="livePauseBtn" title="Pause">⏸️</button>
+              <button class="btn transport-btn" id="liveNextBtn" title="Next">⏭️</button>
+              <button class="btn transport-btn btn-danger" id="liveStopBtn" title="Stop">⏹️</button>
+            </div>
+          </div>
+          <div class="pane-transport video-transport" id="liveVideoTransport">
+            <div class="video-scrubber">
+              <span class="video-time" id="liveVideoTime">0:00</span>
+              <input type="range" class="video-slider" id="liveVideoSlider" min="0" max="100" value="0">
+              <span class="video-duration" id="liveVideoDuration">0:00</span>
+            </div>
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="liveVideoPlayBtn" title="Play/Pause">⏸️</button>
+              <button class="btn transport-btn" id="liveVideoRestartBtn" title="Restart">⏮️</button>
+              <button class="btn transport-btn btn-danger" id="liveVideoStopBtn" title="Stop">⏹️</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <div class="modal-overlay" id="libraryModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Pick Media for Slideshow</h3>
+        <button class="modal-close" id="closeModalBtn">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="modal-grid" id="modalImageGrid"></div>
+        <p class="modal-hint" id="modalEmptyHint">
+          Need more images? <a href="#" id="goToLibraryLink">Go to Media Library</a>
+        </p>
+      </div>
+      <div class="modal-footer">
+        <span id="modalSelectionCount">0 selected</span>
+        <button class="btn btn-small" id="selectAllModalBtn">Select All</button>
+        <button class="btn btn-small" id="deselectAllModalBtn">Deselect All</button>
+        <button class="btn" id="cancelModalBtn">Cancel</button>
+        <button class="btn btn-primary" id="confirmModalBtn">Add Selected</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="control.js"></script>
+</body>
+</html>
