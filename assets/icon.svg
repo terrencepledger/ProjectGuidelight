@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a237e"/>
+      <stop offset="100%" style="stop-color:#0d1442"/>
+    </linearGradient>
+    <linearGradient id="lightGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#fff9c4"/>
+      <stop offset="50%" style="stop-color:#ffeb3b"/>
+      <stop offset="100%" style="stop-color:#ffc107"/>
+    </linearGradient>
+    <linearGradient id="towerGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#eceff1"/>
+      <stop offset="50%" style="stop-color:#ffffff"/>
+      <stop offset="100%" style="stop-color:#cfd8dc"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="8" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background circle -->
+  <circle cx="128" cy="128" r="120" fill="url(#bgGrad)"/>
+  
+  <!-- Light rays -->
+  <g filter="url(#glow)" opacity="0.9">
+    <polygon points="128,45 108,85 148,85" fill="url(#lightGrad)"/>
+    <polygon points="128,45 85,55 100,90" fill="url(#lightGrad)" opacity="0.7"/>
+    <polygon points="128,45 171,55 156,90" fill="url(#lightGrad)" opacity="0.7"/>
+    <polygon points="128,45 65,70 88,95" fill="url(#lightGrad)" opacity="0.5"/>
+    <polygon points="128,45 191,70 168,95" fill="url(#lightGrad)" opacity="0.5"/>
+  </g>
+  
+  <!-- Light source glow -->
+  <circle cx="128" cy="75" r="25" fill="#ffeb3b" filter="url(#glow)" opacity="0.8"/>
+  <circle cx="128" cy="75" r="15" fill="#fffde7"/>
+  
+  <!-- Lighthouse tower -->
+  <path d="M108,95 L118,95 L118,85 L138,85 L138,95 L148,95 L155,200 L101,200 Z" fill="url(#towerGrad)"/>
+  
+  <!-- Lighthouse stripes -->
+  <rect x="106" y="120" width="44" height="15" fill="#c62828"/>
+  <rect x="103" y="155" width="50" height="15" fill="#c62828"/>
+  
+  <!-- Lighthouse top (lamp room) -->
+  <rect x="113" y="75" width="30" height="20" fill="#37474f" rx="2"/>
+  <rect x="116" y="78" width="24" height="14" fill="#fff9c4"/>
+  
+  <!-- Lighthouse base -->
+  <rect x="95" y="195" width="66" height="12" fill="#455a64" rx="2"/>
+  
+  <!-- Roof -->
+  <polygon points="128,65 108,78 148,78" fill="#37474f"/>
+  <circle cx="128" cy="62" r="4" fill="#ffc107"/>
+</svg>

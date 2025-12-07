@@ -77,6 +77,14 @@ Add ambient/background audio track support for slideshows:
 - Fade in/out controls
 - Volume control separate from video audio
 
+### Audio + Visual Layering
+Allow audio to play simultaneously with other visual content:
+
+- Audio continues while displaying images, slideshows, or scripture
+- Independent transport controls for audio layer
+- Visual indicator showing audio is playing behind current content
+- Fade/crossfade between audio tracks
+
 ---
 
 ## Phase 5: Service Planning

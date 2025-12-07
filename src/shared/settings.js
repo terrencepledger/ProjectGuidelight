@@ -1,21 +1,36 @@
 const fs = require('fs');
 const path = require('path');
 
-const SETTINGS_PATH = path.join(__dirname, '..', '..', 'data', 'settings.json');
+let SETTINGS_PATH = null;
 
 const DEFAULT_SETTINGS = {
   standbyImage: null,
   slideshowInterval: 7000,
   bibleVersion: 'de4e12af7f28f599-02',
+  bibleApiKey: '',
   scriptureBackground: '#000000',
+  scriptureBackgroundImage: null,
+  scriptureFontFamily: 'Georgia',
+  scriptureFontSize: 48,
+  scriptureFontColor: '#FFFFFF',
   presentationDisplayId: null,
   scalingMode: 'fit',
   mediaLibrary: [],
   slideshowPresets: [],
-  activePresetId: null
+  activePresetId: null,
+  pinnedScriptures: [],
+  recentScriptures: []
 };
 
+function initSettings(userDataPath) {
+  SETTINGS_PATH = path.join(userDataPath, 'settings.json');
+}
+
 function loadSettings() {
+  if (!SETTINGS_PATH) {
+    console.error('Settings path not initialized');
+    return { ...DEFAULT_SETTINGS };
+  }
   try {
     if (fs.existsSync(SETTINGS_PATH)) {
       const data = fs.readFileSync(SETTINGS_PATH, 'utf-8');
@@ -28,6 +43,10 @@ function loadSettings() {
 }
 
 function saveSettings(settings) {
+  if (!SETTINGS_PATH) {
+    console.error('Settings path not initialized');
+    return false;
+  }
   try {
     const dir = path.dirname(SETTINGS_PATH);
     if (!fs.existsSync(dir)) {
@@ -41,4 +60,4 @@ function saveSettings(settings) {
   }
 }
 
-module.exports = { loadSettings, saveSettings, DEFAULT_SETTINGS };
+module.exports = { initSettings, loadSettings, saveSettings, DEFAULT_SETTINGS };

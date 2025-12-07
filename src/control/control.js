@@ -1,6 +1,31 @@
-const { ipcRenderer } = require('electron');
+const { ipcRenderer, shell } = require('electron');
 const path = require('path');
 const IPC = require('../shared/ipc-channels');
+
+const BOOK_NAMES = {
+  'GEN': 'Genesis', 'EXO': 'Exodus', 'LEV': 'Leviticus', 'NUM': 'Numbers', 'DEU': 'Deuteronomy',
+  'JOS': 'Joshua', 'JDG': 'Judges', 'RUT': 'Ruth', '1SA': '1 Samuel', '2SA': '2 Samuel',
+  '1KI': '1 Kings', '2KI': '2 Kings', '1CH': '1 Chronicles', '2CH': '2 Chronicles',
+  'EZR': 'Ezra', 'NEH': 'Nehemiah', 'EST': 'Esther', 'JOB': 'Job', 'PSA': 'Psalms',
+  'PRO': 'Proverbs', 'ECC': 'Ecclesiastes', 'SNG': 'Song of Solomon', 'ISA': 'Isaiah',
+  'JER': 'Jeremiah', 'LAM': 'Lamentations', 'EZK': 'Ezekiel', 'DAN': 'Daniel', 'HOS': 'Hosea',
+  'JOL': 'Joel', 'AMO': 'Amos', 'OBA': 'Obadiah', 'JON': 'Jonah', 'MIC': 'Micah',
+  'NAM': 'Nahum', 'HAB': 'Habakkuk', 'ZEP': 'Zephaniah', 'HAG': 'Haggai', 'ZEC': 'Zechariah',
+  'MAL': 'Malachi', 'MAT': 'Matthew', 'MRK': 'Mark', 'LUK': 'Luke', 'JHN': 'John',
+  'ACT': 'Acts', 'ROM': 'Romans', '1CO': '1 Corinthians', '2CO': '2 Corinthians',
+  'GAL': 'Galatians', 'EPH': 'Ephesians', 'PHP': 'Philippians', 'COL': 'Colossians',
+  '1TH': '1 Thessalonians', '2TH': '2 Thessalonians', '1TI': '1 Timothy', '2TI': '2 Timothy',
+  'TIT': 'Titus', 'PHM': 'Philemon', 'HEB': 'Hebrews', 'JAS': 'James', '1PE': '1 Peter',
+  '2PE': '2 Peter', '1JN': '1 John', '2JN': '2 John', '3JN': '3 John', 'JUD': 'Jude', 'REV': 'Revelation'
+};
+
+const PRESET_LAYOUT_DEFAULTS = {
+  announcement: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'wide', backgroundDim: 0 },
+  welcome: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'medium', backgroundDim: 0 },
+  prayer: { verticalAlign: 'top', horizontalAlign: 'center', textWidth: 'wide', backgroundDim: 10 },
+  lyrics: { verticalAlign: 'bottom', horizontalAlign: 'center', textWidth: 'medium', backgroundDim: 15 },
+  custom: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'wide', backgroundDim: 0 }
+};
 
 let settings = {};
 let currentMode = 'images';
@@ -11,6 +36,7 @@ let selectedImage = null;
 let displayResolution = { width: 1920, height: 1080 };
 
 let slideshowPresets = [];
+let quickSlides = [];
 let currentPreset = null;
 let modalSelectedImages = [];
 
@@ -21,11 +47,20 @@ let isSynced = false;
 let previewVideo = null;
 let liveVideoState = null;
 
+let previewAudio = null;
+let liveAudioState = null;
+
+const chapterCache = new Map();
+
 let queuedSettings = {
   interval: 7000,
   loop: true,
   transition: 'fade'
 };
+
+let brokenPaths = new Set();
+let contextMenuTarget = null;
+let presentationVisible = true;
 
 function createStandby() {
   return { type: 'standby' };
@@ -77,12 +112,189 @@ function createSingleVideo(filePath, displayName, currentTime) {
   };
 }
 
+function createSingleAudio(filePath, displayName, currentTime) {
+  return {
+    type: 'single-audio',
+    path: filePath,
+    displayName: displayName || path.basename(filePath).replace(/\.[^/.]+$/, ''),
+    currentTime: currentTime || 0,
+    duration: 0
+  };
+}
+
+function createScripture(reference, text, version, bibleId, bookId, chapter, verse, compareText, compareVersion, bibleId2) {
+  return {
+    type: 'scripture',
+    reference,
+    text,
+    version,
+    bibleId,
+    bookId,
+    chapter,
+    verse,
+    compareText: compareText || null,
+    compareVersion: compareVersion || null,
+    bibleId2: bibleId2 || null
+  };
+}
+
+function parseBodyForLists(text) {
+  if (!text) return '';
+  const lines = text.split('\n');
+  const bulletPattern = /^[\u2022\-\*]\s+(.*)$/;
+  const numberPattern = /^(\d+)\.\s+(.*)$/;
+  
+  let isBulletList = true;
+  let isNumberedList = true;
+  
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === '') continue;
+    if (!bulletPattern.test(trimmed)) isBulletList = false;
+    if (!numberPattern.test(trimmed)) isNumberedList = false;
+  }
+  
+  const escapeHtml = (str) => str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  
+  if (isBulletList && lines.some(l => l.trim() !== '')) {
+    const items = lines
+      .filter(l => l.trim() !== '')
+      .map(l => {
+        const match = l.trim().match(bulletPattern);
+        return match ? `<li>${escapeHtml(match[1])}</li>` : '';
+      })
+      .join('');
+    return `<ul>${items}</ul>`;
+  }
+  
+  if (isNumberedList && lines.some(l => l.trim() !== '')) {
+    const items = lines
+      .filter(l => l.trim() !== '')
+      .map(l => {
+        const match = l.trim().match(numberPattern);
+        return match ? `<li>${escapeHtml(match[2])}</li>` : '';
+      })
+      .join('');
+    return `<ol>${items}</ol>`;
+  }
+  
+  return escapeHtml(text).replace(/\n/g, '<br>');
+}
+
+function createQuickSlide({ id, preset, title, body, background, backgroundImage, fontFamily, titleFontSize, fontSize, fontColor, verticalAlign, horizontalAlign, textWidth, backgroundDim, elements, displayName }) {
+  const presetKey = preset || 'announcement';
+  const defaults = PRESET_LAYOUT_DEFAULTS[presetKey] || PRESET_LAYOUT_DEFAULTS.announcement;
+  return {
+    type: 'quick-slide',
+    id: id || generateId(),
+    preset: presetKey,
+    displayName: displayName || '',
+    title: title || '',
+    body: body || '',
+    elements: elements || null,
+    background: background || '#000000',
+    backgroundImage: backgroundImage || null,
+    fontFamily: fontFamily || 'Georgia',
+    titleFontSize: titleFontSize || 60,
+    fontSize: fontSize || 48,
+    fontColor: fontColor || '#FFFFFF',
+    verticalAlign: verticalAlign !== undefined ? verticalAlign : defaults.verticalAlign,
+    horizontalAlign: horizontalAlign !== undefined ? horizontalAlign : defaults.horizontalAlign,
+    textWidth: textWidth !== undefined ? textWidth : defaults.textWidth,
+    backgroundDim: backgroundDim !== undefined ? backgroundDim : defaults.backgroundDim
+  };
+}
+
+function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWidth }) {
+  return {
+    type: type || 'body',
+    text: text || '',
+    verticalAlign: verticalAlign || 'center',
+    horizontalAlign: horizontalAlign || 'center',
+    textWidth: textWidth || 'wide'
+  };
+}
+
+function getCacheKey(bibleId, bookId, chapter) {
+  return `${bibleId}:${bookId}.${chapter}`;
+}
+
+function getCachedVerse(bibleId, bookId, chapter, verse) {
+  const key = getCacheKey(bibleId, bookId, chapter);
+  const cached = chapterCache.get(key);
+  if (cached && cached.verses[verse]) {
+    return { text: cached.verses[verse], version: cached.version };
+  }
+  return null;
+}
+
+async function fetchAndCacheChapter(bibleId, bookId, chapter) {
+  const key = getCacheKey(bibleId, bookId, chapter);
+  if (chapterCache.has(key)) {
+    return chapterCache.get(key);
+  }
+  
+  const result = await ipcRenderer.invoke(IPC.FETCH_CHAPTER, { bibleId, bookId, chapter });
+  if (!result.error) {
+    chapterCache.set(key, result);
+  }
+  return result;
+}
+
+function prefetchNearbyChapter(bibleId, bookId, chapter, verse, bibleId2) {
+  const key = getCacheKey(bibleId, bookId, chapter);
+  const cached = chapterCache.get(key);
+  if (!cached) return;
+  
+  const verseCount = cached.verseCount || Object.keys(cached.verses).length;
+  
+  if (verse <= 3 && chapter > 1) {
+    const prevKey = getCacheKey(bibleId, bookId, chapter - 1);
+    if (!chapterCache.has(prevKey)) {
+      fetchAndCacheChapter(bibleId, bookId, chapter - 1).catch(() => {});
+      if (bibleId2) fetchAndCacheChapter(bibleId2, bookId, chapter - 1).catch(() => {});
+    }
+  } else if (verse >= verseCount - 2) {
+    const nextKey = getCacheKey(bibleId, bookId, chapter + 1);
+    if (!chapterCache.has(nextKey)) {
+      fetchAndCacheChapter(bibleId, bookId, chapter + 1).catch(() => {});
+      if (bibleId2) fetchAndCacheChapter(bibleId2, bookId, chapter + 1).catch(() => {});
+    }
+  }
+}
+
+async function getVerseWithCache(bibleId, bookId, chapter, verse, bibleId2) {
+  const cached = getCachedVerse(bibleId, bookId, chapter, verse);
+  let cached2 = bibleId2 ? getCachedVerse(bibleId2, bookId, chapter, verse) : null;
+  
+  if (cached && (!bibleId2 || cached2)) {
+    const bookName = BOOK_NAMES[bookId] || bookId;
+    return {
+      reference: `${bookName} ${chapter}:${verse}`,
+      bookId,
+      chapter,
+      verse,
+      text: cached.text,
+      version: cached.version,
+      bibleId,
+      compareText: cached2 ? cached2.text : null,
+      compareVersion: cached2 ? cached2.version : null,
+      bibleId2: bibleId2 || null
+    };
+  }
+  
+  return null;
+}
+
 async function init() {
   settings = await ipcRenderer.invoke(IPC.GET_SETTINGS);
   displays = await ipcRenderer.invoke(IPC.GET_DISPLAYS);
   mediaLibrary = await ipcRenderer.invoke(IPC.GET_MEDIA_LIBRARY);
   displayResolution = await ipcRenderer.invoke(IPC.GET_DISPLAY_RESOLUTION);
   slideshowPresets = await ipcRenderer.invoke(IPC.GET_SLIDESHOW_PRESETS);
+  quickSlides = await ipcRenderer.invoke(IPC.GET_QUICK_SLIDES);
+  
+  await validateBrokenPaths();
   
   live = createStandby();
   staged = null;
@@ -98,10 +310,26 @@ async function init() {
   setupStagedTransportControls();
   setupLiveTransportControls();
   setupVideoTransportControls();
+  setupAudioTransportControls();
+  setupScriptureControls();
+  setupScriptureTransportControls();
+  setupQuickSlidesControls();
   setupModal();
+  setupContextMenu();
+  setupBlackoutMode();
   renderImageGrid();
   updateLiveDisplay();
   loadActivePreset();
+}
+
+async function validateBrokenPaths() {
+  const broken = await ipcRenderer.invoke(IPC.VALIDATE_PATHS);
+  brokenPaths.clear();
+  broken.forEach(item => brokenPaths.add(item.path));
+}
+
+function isPathBroken(filePath) {
+  return brokenPaths.has(filePath);
 }
 
 function setupNavigation() {
@@ -129,14 +357,15 @@ function setupStandbyButton() {
   standbyBtn.addEventListener('click', () => {
     stopLiveSlideshowTimer();
     stopLiveVideo();
+    stopLiveAudio();
     ipcRenderer.send(IPC.SHOW_STANDBY);
     live = createStandby();
-    staged = null;
     isSynced = false;
     updatePreviewDisplay();
     updateLiveDisplay();
     updateGoLiveButton();
     updateVideoTransportUI();
+    updateAudioTransportUI();
   });
 }
 
@@ -153,6 +382,25 @@ function setupSettingsControls() {
     }
   });
 
+  const clearStandbyBtn = document.getElementById('clearStandbyImage');
+  clearStandbyBtn.addEventListener('click', async () => {
+    await ipcRenderer.invoke(IPC.CLEAR_STANDBY);
+    settings.standbyImage = null;
+    updateSettingsUI();
+  });
+
+  const apiKeyInput = document.getElementById('bibleApiKey');
+  apiKeyInput.addEventListener('change', async () => {
+    settings.bibleApiKey = apiKeyInput.value.trim();
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { bibleApiKey: settings.bibleApiKey });
+  });
+
+  const apiSignupLink = document.getElementById('apiSignupLink');
+  apiSignupLink.addEventListener('click', (e) => {
+    e.preventDefault();
+    shell.openExternal('https://scripture.api.bible/signup');
+  });
+
   const monitorSelect = document.getElementById('presentationMonitor');
   monitorSelect.addEventListener('change', async () => {
     const displayId = parseInt(monitorSelect.value, 10);
@@ -164,14 +412,165 @@ function setupSettingsControls() {
     settings.scalingMode = scalingSelect.value;
     await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scalingMode: scalingSelect.value });
   });
+
+  const fontFamilySelect = document.getElementById('scriptureFontFamily');
+  fontFamilySelect.addEventListener('change', async () => {
+    settings.scriptureFontFamily = fontFamilySelect.value;
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureFontFamily: fontFamilySelect.value });
+    if (staged?.type === 'scripture') {
+      updatePreviewDisplay();
+      updateGoLiveButton();
+    }
+  });
+
+  const fontSizeSlider = document.getElementById('scriptureFontSize');
+  const fontSizeValue = document.getElementById('fontSizeValue');
+  fontSizeSlider.addEventListener('input', () => {
+    fontSizeValue.textContent = fontSizeSlider.value;
+  });
+  fontSizeSlider.addEventListener('change', async () => {
+    settings.scriptureFontSize = parseInt(fontSizeSlider.value, 10);
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureFontSize: settings.scriptureFontSize });
+    if (staged?.type === 'scripture') {
+      updatePreviewDisplay();
+      updateGoLiveButton();
+    }
+  });
+
+  const fontColorInput = document.getElementById('scriptureFontColor');
+  const fontColorPreview = document.getElementById('fontColorPreview');
+  fontColorInput.addEventListener('input', () => {
+    fontColorPreview.textContent = fontColorInput.value.toUpperCase();
+  });
+  fontColorInput.addEventListener('change', async () => {
+    settings.scriptureFontColor = fontColorInput.value;
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureFontColor: fontColorInput.value });
+    if (staged?.type === 'scripture') {
+      updatePreviewDisplay();
+      updateGoLiveButton();
+    }
+  });
+
+  const bgColorInput = document.getElementById('scriptureBackground');
+  const bgColorPreview = document.getElementById('bgColorPreview');
+  bgColorInput.addEventListener('input', () => {
+    bgColorPreview.textContent = bgColorInput.value.toUpperCase();
+  });
+  bgColorInput.addEventListener('change', async () => {
+    settings.scriptureBackground = bgColorInput.value;
+    settings.scriptureBackgroundImage = null;
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { 
+      scriptureBackground: bgColorInput.value,
+      scriptureBackgroundImage: null 
+    });
+    if (staged?.type === 'scripture') {
+      updatePreviewDisplay();
+      updateGoLiveButton();
+    }
+  });
+
+  const bgTypeButtons = document.querySelectorAll('.bg-type-btn');
+  const bgColorGroup = document.querySelector('.bg-color-group');
+  const bgImageGroup = document.querySelector('.bg-image-group');
+  const bgSelect = document.getElementById('scriptureBackgroundSelect');
+  const customBgRow = document.getElementById('customBgRow');
+
+  let defaultScriptureBackgrounds = [];
+
+  async function loadDefaultScriptureBackgrounds() {
+    defaultScriptureBackgrounds = await ipcRenderer.invoke(IPC.GET_DEFAULT_SCRIPTURE_BACKGROUNDS);
+    bgSelect.innerHTML = '<option value="">-- Select --</option>';
+    defaultScriptureBackgrounds.forEach(bg => {
+      const opt = document.createElement('option');
+      opt.value = bg.path;
+      opt.textContent = bg.name;
+      opt.dataset.isDefault = 'true';
+      bgSelect.appendChild(opt);
+    });
+    const customOpt = document.createElement('option');
+    customOpt.value = 'custom';
+    customOpt.textContent = 'Custom Image...';
+    bgSelect.appendChild(customOpt);
+  }
+
+  loadDefaultScriptureBackgrounds();
+
+  bgTypeButtons.forEach(btn => {
+    btn.addEventListener('click', async () => {
+      bgTypeButtons.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      const type = btn.dataset.type;
+      if (type === 'color') {
+        bgColorGroup.style.display = '';
+        bgImageGroup.style.display = 'none';
+        settings.scriptureBackgroundImage = null;
+        await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: null });
+        if (staged?.type === 'scripture') {
+          updatePreviewDisplay();
+          updateGoLiveButton();
+        }
+      } else {
+        bgColorGroup.style.display = 'none';
+        bgImageGroup.style.display = '';
+      }
+    });
+  });
+
+  bgSelect.addEventListener('change', async () => {
+    const value = bgSelect.value;
+    if (value === 'custom') {
+      customBgRow.style.display = 'flex';
+    } else if (value) {
+      customBgRow.style.display = 'none';
+      settings.scriptureBackgroundImage = value;
+      await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: value });
+      document.getElementById('scriptureBackgroundImagePath').value = '';
+      if (staged?.type === 'scripture') {
+        updatePreviewDisplay();
+        updateGoLiveButton();
+      }
+    } else {
+      customBgRow.style.display = 'none';
+      settings.scriptureBackgroundImage = null;
+      await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: null });
+      if (staged?.type === 'scripture') {
+        updatePreviewDisplay();
+        updateGoLiveButton();
+      }
+    }
+  });
+
+  const pickScriptureBgBtn = document.getElementById('pickScriptureBackground');
+  pickScriptureBgBtn.addEventListener('click', async () => {
+    const files = await ipcRenderer.invoke(IPC.PICK_FILE, [
+      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
+    ]);
+    if (files && files.length > 0) {
+      settings.scriptureBackgroundImage = files[0];
+      await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: files[0] });
+      document.getElementById('scriptureBackgroundImagePath').value = path.basename(files[0]);
+      if (staged?.type === 'scripture') {
+        updatePreviewDisplay();
+        updateGoLiveButton();
+      }
+    }
+  });
 }
 
 function updateSettingsUI() {
   const standbyInput = document.getElementById('standbyImagePath');
+  const clearStandbyBtn = document.getElementById('clearStandbyImage');
   if (settings.standbyImage) {
-    standbyInput.value = path.basename(settings.standbyImage);
+    if (isPathBroken(settings.standbyImage)) {
+      standbyInput.value = '⚠ ' + path.basename(settings.standbyImage) + ' (missing)';
+    } else {
+      standbyInput.value = path.basename(settings.standbyImage);
+    }
+    clearStandbyBtn.style.display = '';
   } else {
     standbyInput.value = '';
+    standbyInput.placeholder = 'Using default';
+    clearStandbyBtn.style.display = 'none';
   }
 
   const monitorSelect = document.getElementById('presentationMonitor');
@@ -190,6 +589,61 @@ function updateSettingsUI() {
 
   const scalingSelect = document.getElementById('scalingMode');
   scalingSelect.value = settings.scalingMode || 'fit';
+
+  const fontFamilySelect = document.getElementById('scriptureFontFamily');
+  fontFamilySelect.value = settings.scriptureFontFamily || 'Georgia';
+
+  const fontSizeSlider = document.getElementById('scriptureFontSize');
+  const fontSizeValue = document.getElementById('fontSizeValue');
+  fontSizeSlider.value = settings.scriptureFontSize || 48;
+  fontSizeValue.textContent = fontSizeSlider.value;
+
+  const fontColorInput = document.getElementById('scriptureFontColor');
+  const fontColorPreview = document.getElementById('fontColorPreview');
+  fontColorInput.value = settings.scriptureFontColor || '#FFFFFF';
+  fontColorPreview.textContent = fontColorInput.value.toUpperCase();
+
+  const bgColorInput = document.getElementById('scriptureBackground');
+  const bgColorPreview = document.getElementById('bgColorPreview');
+  bgColorInput.value = settings.scriptureBackground || '#000000';
+  bgColorPreview.textContent = bgColorInput.value.toUpperCase();
+
+  const bgTypeButtons = document.querySelectorAll('.bg-type-btn');
+  const bgColorGroup = document.querySelector('.bg-color-group');
+  const bgImageGroup = document.querySelector('.bg-image-group');
+  const bgSelect = document.getElementById('scriptureBackgroundSelect');
+  const customBgRow = document.getElementById('customBgRow');
+  const scriptureBgInput = document.getElementById('scriptureBackgroundImagePath');
+
+  if (settings.scriptureBackgroundImage) {
+    bgTypeButtons.forEach(b => b.classList.remove('active'));
+    document.querySelector('.bg-type-btn[data-type="image"]').classList.add('active');
+    bgColorGroup.style.display = 'none';
+    bgImageGroup.style.display = '';
+    
+    const isDefault = Array.from(bgSelect.options).some(
+      opt => opt.value === settings.scriptureBackgroundImage && opt.dataset.isDefault === 'true'
+    );
+    if (isDefault) {
+      bgSelect.value = settings.scriptureBackgroundImage;
+      customBgRow.style.display = 'none';
+    } else {
+      bgSelect.value = 'custom';
+      customBgRow.style.display = 'flex';
+      scriptureBgInput.value = path.basename(settings.scriptureBackgroundImage);
+    }
+  } else {
+    bgTypeButtons.forEach(b => b.classList.remove('active'));
+    document.querySelector('.bg-type-btn[data-type="color"]').classList.add('active');
+    bgColorGroup.style.display = '';
+    bgImageGroup.style.display = 'none';
+    bgSelect.value = '';
+    customBgRow.style.display = 'none';
+    scriptureBgInput.value = '';
+  }
+
+  const apiKeyInput = document.getElementById('bibleApiKey');
+  apiKeyInput.value = settings.bibleApiKey || '';
 }
 
 function getStagedImagePath() {
@@ -214,13 +668,19 @@ function getStagedVideoPath() {
   return null;
 }
 
+function getStagedAudioPath() {
+  if (!staged) return null;
+  if (staged.type === 'single-audio') return staged.path;
+  return null;
+}
+
 function getLiveImagePath() {
   if (!live || live.type === 'standby') return null;
   if (live.type === 'single-image') return live.path;
   if (live.type === 'single-video') return null;
   if (live.type === 'slideshow' && live.queue.length > 0) {
     const item = live.queue[live.index];
-    if (item?.type === 'video') return null;
+    if (item?.type === 'video' || item?.type === 'quick-slide') return null;
     return item?.path || null;
   }
   return null;
@@ -233,6 +693,12 @@ function getLiveVideoPath() {
     const item = live.queue[live.index];
     if (item?.type === 'video') return item.path;
   }
+  return null;
+}
+
+function getLiveAudioPath() {
+  if (!live || live.type === 'standby') return null;
+  if (live.type === 'single-audio') return live.path;
   return null;
 }
 
@@ -254,6 +720,15 @@ function getMediaName(content) {
     return preset?.name || 'Slideshow';
   }
   
+  if (content.type === 'scripture') {
+    return `${content.reference} (${content.version})`;
+  }
+  
+  if (content.type === 'quick-slide') {
+    const presetLabel = content.preset.charAt(0).toUpperCase() + content.preset.slice(1);
+    return content.title || presetLabel;
+  }
+  
   return '';
 }
 
@@ -264,29 +739,89 @@ function updatePreviewDisplay() {
   
   const imagePath = getStagedImagePath();
   const videoPath = getStagedVideoPath();
+  const audioPath = getStagedAudioPath();
   
   if (!staged || staged.type === 'standby') {
     previewEl.innerHTML = '<span class="display-placeholder">Select content to preview</span>';
     clearBtn.classList.remove('visible');
     mediaNameEl.textContent = '';
     cleanupPreviewVideo();
+    cleanupPreviewAudio();
     updateVideoTransportUI();
+    updateAudioTransportUI();
     return;
   }
   
-  if (videoPath) {
+  if (audioPath) {
+    const displayName = staged.displayName || path.basename(audioPath).replace(/\.[^/.]+$/, '');
+    previewEl.innerHTML = `<div class="audio-icon-display"><span class="audio-icon">🎵</span><span class="audio-track-name">${displayName}</span></div><span class="muted-indicator" title="Preview is muted">🔇</span>`;
+    previewAudio = document.createElement('audio');
+    previewAudio.src = 'file://' + audioPath;
+    previewAudio.muted = true;
+    previewAudio.preload = 'metadata';
+    setupPreviewAudioEvents();
+    cleanupPreviewVideo();
+  } else if (videoPath) {
     previewEl.innerHTML = `<video id="previewVideoEl" src="file://${videoPath}" muted></video><span class="muted-indicator" title="Preview is muted">🔇</span>`;
     previewVideo = document.getElementById('previewVideoEl');
     previewVideo.currentTime = staged.currentTime || 0;
     setupPreviewVideoEvents();
+    cleanupPreviewAudio();
   } else if (imagePath) {
     previewEl.innerHTML = `<img src="file://${imagePath}" alt="Preview">`;
     cleanupPreviewVideo();
+    cleanupPreviewAudio();
+  } else if (staged.type === 'scripture') {
+    const bg = settings.scriptureBackground || '#000000';
+    const bgImage = settings.scriptureBackgroundImage ? settings.scriptureBackgroundImage.replace(/\\/g, '/') : null;
+    const fontFamily = settings.scriptureFontFamily || 'Georgia';
+    const fontSize = settings.scriptureFontSize || 48;
+    const fontColor = settings.scriptureFontColor || '#FFFFFF';
+    
+    const previewFontSize = Math.round(fontSize * 0.3);
+    const previewRefSize = Math.round(previewFontSize * 0.5);
+    
+    let bgStyle = bgImage 
+      ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
+      : `background-color: ${bg};`;
+    
+    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor};`;
+    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${previewRefSize}px; color: ${fontColor}; opacity: 0.7;`;
+    
+    const compareHtml = staged.compareText ? 
+      `<div class="scripture-compare-preview"><div class="scripture-text" style="${textStyle}">${staged.compareText}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div>` : '';
+    previewEl.innerHTML = `<div class="scripture-preview ${staged.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.version})</div></div>${compareHtml}</div>`;
+    cleanupPreviewVideo();
+    cleanupPreviewAudio();
+  } else if (staged.type === 'quick-slide') {
+    const bg = staged.background || '#000000';
+    const bgImage = staged.backgroundImage ? staged.backgroundImage.replace(/\\/g, '/') : null;
+    const fontFamily = staged.fontFamily || 'Georgia';
+    const fontSize = staged.fontSize || 48;
+    const fontColor = staged.fontColor || '#FFFFFF';
+    
+    const previewFontSize = Math.round(fontSize * 0.3);
+    const previewTitleSize = Math.round(fontSize * 0.35);
+    
+    let bgStyle = bgImage 
+      ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
+      : `background-color: ${bg};`;
+    
+    const showTitle = staged.preset === 'announcement' || staged.preset === 'prayer';
+    const titleHtml = showTitle && staged.title 
+      ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${staged.title}</div>` 
+      : '';
+    const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${staged.body}</div>`;
+    
+    previewEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
+    cleanupPreviewVideo();
+    cleanupPreviewAudio();
   }
   
   mediaNameEl.textContent = getMediaName(staged);
   clearBtn.classList.add('visible');
   updateVideoTransportUI();
+  updateAudioTransportUI();
 }
 
 function shouldEnableGoLive() {
@@ -316,9 +851,38 @@ function shouldEnableGoLive() {
     return false;
   }
   
+  if (staged.type === 'single-audio') {
+    if (staged.path !== live.path) return true;
+    if (!isSynced) return true;
+    return false;
+  }
+  
   if (staged.type === 'slideshow') {
     if (isSynced) return false;
     return true;
+  }
+  
+  if (staged.type === 'scripture') {
+    if (!live || live.type !== 'scripture') return true;
+    if (staged.reference !== live.reference || staged.bibleId !== live.bibleId) return true;
+    if (staged.compareText !== live.compareText) return true;
+    const currentBg = settings.scriptureBackground || '#000000';
+    const currentBgImage = settings.scriptureBackgroundImage || null;
+    const currentFontFamily = settings.scriptureFontFamily || 'Georgia';
+    const currentFontSize = settings.scriptureFontSize || 48;
+    const currentFontColor = settings.scriptureFontColor || '#FFFFFF';
+    if (currentBg !== live.liveBackground) return true;
+    if (currentBgImage !== live.liveBackgroundImage) return true;
+    if (currentFontFamily !== live.liveFontFamily) return true;
+    if (currentFontSize !== live.liveFontSize) return true;
+    if (currentFontColor !== live.liveFontColor) return true;
+    return false;
+  }
+  
+  if (staged.type === 'quick-slide') {
+    if (!live || live.type !== 'quick-slide') return true;
+    if (staged.id !== live.id) return true;
+    return false;
   }
   
   return false;
@@ -341,20 +905,51 @@ function updateLiveDisplay() {
     }
     mediaNameEl.textContent = '';
     updateVideoTransportUI();
+    updateAudioTransportUI();
     return;
   }
   
   const imagePath = getLiveImagePath();
   const videoPath = getLiveVideoPath();
+  const audioPath = getLiveAudioPath();
   
-  if (videoPath) {
+  if (audioPath) {
+    const displayName = live.displayName || path.basename(audioPath).replace(/\.[^/.]+$/, '');
+    liveEl.innerHTML = `<div class="audio-icon-display"><span class="audio-icon">🎵</span><span class="audio-track-name">${displayName}</span></div>`;
+  } else if (videoPath) {
     liveEl.innerHTML = `<img src="" alt="Live Video" style="display:none"><span class="display-placeholder">▶ Video Playing</span>`;
   } else if (imagePath) {
     liveEl.innerHTML = `<img src="file://${imagePath}" alt="Live">`;
+  } else if (live.type === 'scripture') {
+    const compareHtml = live.compareText ?
+      `<div class="scripture-compare-preview"><div class="scripture-text">${live.compareText}</div><div class="scripture-ref">${live.reference} (${live.compareVersion})</div></div>` : '';
+    liveEl.innerHTML = `<div class="scripture-preview ${live.compareText ? 'compare-mode' : ''}"><div class="scripture-main-preview"><div class="scripture-text">${live.text}</div><div class="scripture-ref">${live.reference} (${live.version})</div></div>${compareHtml}</div>`;
+  } else if (live.type === 'quick-slide') {
+    const bg = live.background || '#000000';
+    const bgImage = live.backgroundImage ? live.backgroundImage.replace(/\\/g, '/') : null;
+    const fontFamily = live.fontFamily || 'Georgia';
+    const fontSize = live.fontSize || 48;
+    const fontColor = live.fontColor || '#FFFFFF';
+    
+    const previewFontSize = Math.round(fontSize * 0.3);
+    const previewTitleSize = Math.round(fontSize * 0.35);
+    
+    let bgStyle = bgImage 
+      ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
+      : `background-color: ${bg};`;
+    
+    const showTitle = live.preset === 'announcement' || live.preset === 'prayer';
+    const titleHtml = showTitle && live.title 
+      ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${live.title}</div>` 
+      : '';
+    const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${live.body}</div>`;
+    
+    liveEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
   }
   
   mediaNameEl.textContent = getMediaName(live);
   updateVideoTransportUI();
+  updateAudioTransportUI();
 }
 
 function setupDisplayControls() {
@@ -365,6 +960,7 @@ function setupDisplayControls() {
     if (!staged) {
       stopLiveSlideshowTimer();
       stopLiveVideo();
+      stopLiveAudio();
       ipcRenderer.send(IPC.SHOW_STANDBY);
       live = createStandby();
       updateLiveDisplay();
@@ -375,6 +971,7 @@ function setupDisplayControls() {
     if (staged.type === 'single-image') {
       stopLiveSlideshowTimer();
       stopLiveVideo();
+      stopLiveAudio();
       ipcRenderer.send(IPC.SHOW_IMAGE, staged.path);
       live = { ...staged };
       isSynced = false;
@@ -387,8 +984,85 @@ function setupDisplayControls() {
     if (staged.type === 'single-video') {
       stopLiveSlideshowTimer();
       stopLiveVideo();
+      stopLiveAudio();
       const startTime = staged.currentTime || 0;
       ipcRenderer.send(IPC.SHOW_VIDEO, staged.path, startTime);
+      live = { ...staged };
+      isSynced = true;
+      updateLiveDisplay();
+      updateGoLiveButton();
+      updateTransportUI();
+      return;
+    }
+    
+    if (staged.type === 'single-audio') {
+      stopLiveSlideshowTimer();
+      stopLiveVideo();
+      stopLiveAudio();
+      const startTime = staged.currentTime || 0;
+      ipcRenderer.send(IPC.PLAY_AUDIO, staged.path, startTime);
+      live = { ...staged };
+      isSynced = true;
+      updateLiveDisplay();
+      updateGoLiveButton();
+      updateTransportUI();
+      return;
+    }
+    
+    if (staged.type === 'scripture') {
+      stopLiveSlideshowTimer();
+      stopLiveVideo();
+      stopLiveAudio();
+      ipcRenderer.send(IPC.SHOW_SCRIPTURE, {
+        reference: staged.reference,
+        text: staged.text,
+        version: staged.version,
+        compareText: staged.compareText,
+        compareVersion: staged.compareVersion,
+        background: settings.scriptureBackground || '#000000',
+        backgroundImage: settings.scriptureBackgroundImage || null,
+        fontFamily: settings.scriptureFontFamily || 'Georgia',
+        fontSize: settings.scriptureFontSize || 48,
+        fontColor: settings.scriptureFontColor || '#FFFFFF'
+      });
+      live = { 
+        ...staged,
+        liveBackground: settings.scriptureBackground || '#000000',
+        liveBackgroundImage: settings.scriptureBackgroundImage || null,
+        liveFontFamily: settings.scriptureFontFamily || 'Georgia',
+        liveFontSize: settings.scriptureFontSize || 48,
+        liveFontColor: settings.scriptureFontColor || '#FFFFFF'
+      };
+      isSynced = true;
+      
+      fetchAndCacheChapter(live.bibleId, live.bookId, live.chapter).then(() => {
+        prefetchNearbyChapter(live.bibleId, live.bookId, live.chapter, live.verse, live.bibleId2);
+      });
+      if (live.bibleId2) {
+        fetchAndCacheChapter(live.bibleId2, live.bookId, live.chapter).catch(() => {});
+      }
+      
+      updateLiveDisplay();
+      updateGoLiveButton();
+      updateTransportUI();
+      renderScriptureLists();
+      return;
+    }
+
+    if (staged.type === 'quick-slide') {
+      stopLiveSlideshowTimer();
+      stopLiveVideo();
+      stopLiveAudio();
+      ipcRenderer.send(IPC.SHOW_QUICK_SLIDE, {
+        preset: staged.preset,
+        title: staged.title,
+        body: staged.body,
+        background: staged.background,
+        backgroundImage: staged.backgroundImage,
+        fontFamily: staged.fontFamily,
+        fontSize: staged.fontSize,
+        fontColor: staged.fontColor
+      });
       live = { ...staged };
       isSynced = true;
       updateLiveDisplay();
@@ -438,15 +1112,18 @@ function setupImageControls() {
 
   addFilesBtn.addEventListener('click', async () => {
     const filePaths = await ipcRenderer.invoke(IPC.PICK_FILE, [
-      { name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'mp4', 'webm', 'mov', 'avi', 'mkv'] }
+      { name: 'Media', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'mp4', 'webm', 'mov', 'avi', 'mkv', 'mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac'] }
     ]);
     if (filePaths.length > 0) {
       const imageExts = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp'];
-      const files = filePaths.map(p => ({
-        path: p,
-        name: path.basename(p),
-        type: imageExts.includes(path.extname(p).toLowerCase()) ? 'image' : 'video'
-      }));
+      const videoExts = ['.mp4', '.webm', '.mov', '.avi', '.mkv'];
+      const files = filePaths.map(p => {
+        const ext = path.extname(p).toLowerCase();
+        let type = 'audio';
+        if (imageExts.includes(ext)) type = 'image';
+        else if (videoExts.includes(ext)) type = 'video';
+        return { path: p, name: path.basename(p), type };
+      });
       mediaLibrary = await ipcRenderer.invoke(IPC.ADD_TO_LIBRARY, files);
       await generateMissingThumbnails(files.filter(f => f.type === 'video'));
       renderImageGrid();
@@ -505,12 +1182,16 @@ function generateVideoThumbnail(videoPath) {
 
 function renderImageGrid() {
   const grid = document.getElementById('imageGrid');
-  let items = mediaLibrary;
+  let items = [...mediaLibrary, ...quickSlides];
   
   if (currentFilter === 'image') {
     items = mediaLibrary.filter(f => f.type === 'image');
   } else if (currentFilter === 'video') {
     items = mediaLibrary.filter(f => f.type === 'video');
+  } else if (currentFilter === 'audio') {
+    items = mediaLibrary.filter(f => f.type === 'audio');
+  } else if (currentFilter === 'quick-slide') {
+    items = quickSlides;
   }
 
   grid.innerHTML = '';
@@ -519,7 +1200,10 @@ function renderImageGrid() {
     const emptyDiv = document.createElement('div');
     emptyDiv.className = 'empty-library';
     const filterText = currentFilter === 'all' ? 'media' : currentFilter + 's';
-    emptyDiv.innerHTML = `<p>No ${filterText} in library</p><p class="hint">Add a folder or individual files to get started</p>`;
+    const hint = currentFilter === 'quick-slide' 
+      ? 'Create slides in the Quick Slides tab'
+      : 'Add a folder or individual files to get started';
+    emptyDiv.innerHTML = `<p>No ${filterText} in library</p><p class="hint">${hint}</p>`;
     grid.appendChild(emptyDiv);
     return;
   }
@@ -527,14 +1211,34 @@ function renderImageGrid() {
   items.forEach(file => {
     const item = document.createElement('div');
     item.className = 'thumbnail-item';
-    item.dataset.path = file.path;
+    item.dataset.path = file.path || file.id;
     item.dataset.type = file.type;
+    
+    const isQuickSlide = file.type === 'quick-slide';
+    const isBroken = !isQuickSlide && isPathBroken(file.path);
+    if (isBroken) {
+      item.classList.add('broken');
+    }
 
     const imgContainer = document.createElement('div');
     imgContainer.className = 'thumbnail-image';
 
-    if (file.type === 'video') {
+    if (isBroken) {
+      const brokenOverlay = document.createElement('div');
+      brokenOverlay.className = 'broken-overlay';
+      brokenOverlay.innerHTML = '!';
+      brokenOverlay.title = 'File not found';
+      imgContainer.appendChild(brokenOverlay);
+      
+      const placeholder = document.createElement('div');
+      placeholder.style.cssText = 'width:100%;height:100%;background:#333;';
+      imgContainer.appendChild(placeholder);
+    } else if (isQuickSlide) {
+      renderQuickSlideThumbnail(file, imgContainer);
+    } else if (file.type === 'video') {
       renderVideoThumbnail(file, imgContainer);
+    } else if (file.type === 'audio') {
+      renderAudioThumbnail(file, imgContainer);
     } else {
       const img = document.createElement('img');
       img.src = 'file://' + file.path;
@@ -558,8 +1262,17 @@ function renderImageGrid() {
     removeBtn.innerHTML = '×';
     removeBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
-      mediaLibrary = await ipcRenderer.invoke(IPC.REMOVE_FROM_LIBRARY, file.path);
-      if (selectedImage === file.path) {
+      if (isQuickSlide) {
+        const result = await ipcRenderer.invoke(IPC.DELETE_QUICK_SLIDE, file.id);
+        if (result.success) {
+          quickSlides = result.slides;
+        }
+      } else {
+        mediaLibrary = await ipcRenderer.invoke(IPC.REMOVE_FROM_LIBRARY, file.path);
+        brokenPaths.delete(file.path);
+      }
+      const itemId = file.path || file.id;
+      if (selectedImage === itemId) {
         selectedImage = null;
         staged = null;
         updatePreviewDisplay();
@@ -572,11 +1285,23 @@ function renderImageGrid() {
     const nameInput = document.createElement('input');
     nameInput.type = 'text';
     nameInput.className = 'thumbnail-name';
-    nameInput.value = file.displayName || file.name.replace(/\.[^/.]+$/, '');
+    if (isQuickSlide) {
+      const presetLabel = file.preset.charAt(0).toUpperCase() + file.preset.slice(1);
+      nameInput.value = file.displayName || file.title || file.body.substring(0, 20) || presetLabel;
+    } else {
+      nameInput.value = file.displayName || file.name.replace(/\.[^/.]+$/, '');
+    }
     nameInput.addEventListener('click', (e) => e.stopPropagation());
     nameInput.addEventListener('change', async (e) => {
       const newName = e.target.value.trim();
-      if (newName) {
+      if (!newName) return;
+      if (isQuickSlide) {
+        const result = await ipcRenderer.invoke(IPC.UPDATE_QUICK_SLIDE, file.id, { displayName: newName });
+        if (result.success) {
+          file.displayName = newName;
+          quickSlides = result.slides;
+        }
+      } else {
         await ipcRenderer.invoke(IPC.UPDATE_LIBRARY_ITEM, file.path, { displayName: newName });
         file.displayName = newName;
       }
@@ -584,7 +1309,18 @@ function renderImageGrid() {
 
     item.appendChild(imgContainer);
     item.appendChild(nameInput);
-    imgContainer.addEventListener('click', () => selectMedia(file));
+    
+    if (isBroken) {
+      imgContainer.addEventListener('click', (e) => showBrokenContextMenu(e, file));
+    } else {
+      imgContainer.addEventListener('click', () => selectMedia(file));
+      if (isQuickSlide) {
+        imgContainer.addEventListener('dblclick', () => {
+          switchMode('quick-slides');
+          loadQuickSlideForEdit(file);
+        });
+      }
+    }
     grid.appendChild(item);
   });
 }
@@ -605,6 +1341,57 @@ async function renderVideoThumbnail(file, container) {
   videoBadge.className = 'video-badge';
   videoBadge.innerHTML = '▶';
   container.appendChild(videoBadge);
+}
+
+function renderAudioThumbnail(file, container) {
+  const placeholder = document.createElement('div');
+  placeholder.style.cssText = 'width:100%;height:100%;background:#1a2744;display:flex;align-items:center;justify-content:center;';
+  container.appendChild(placeholder);
+  
+  const audioBadge = document.createElement('div');
+  audioBadge.className = 'audio-badge';
+  audioBadge.innerHTML = '🎵';
+  container.appendChild(audioBadge);
+}
+
+function renderQuickSlideThumbnail(slide, container) {
+  const preview = document.createElement('div');
+  preview.className = 'quick-slide-thumbnail';
+  
+  if (slide.backgroundImage) {
+    preview.style.backgroundImage = `url('file:///${slide.backgroundImage.replace(/\\/g, '/')}')`;
+    preview.style.backgroundSize = 'cover';
+    preview.style.backgroundPosition = 'center';
+  } else {
+    preview.style.backgroundColor = slide.background || '#000';
+  }
+  
+  const showTitle = slide.preset === 'announcement' || slide.preset === 'prayer';
+  
+  if (showTitle && slide.title) {
+    const titleEl = document.createElement('div');
+    titleEl.className = 'qs-thumb-title';
+    titleEl.style.color = slide.fontColor || '#fff';
+    titleEl.style.fontFamily = slide.fontFamily || 'Georgia';
+    titleEl.textContent = slide.title;
+    preview.appendChild(titleEl);
+  }
+  
+  if (slide.body) {
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'qs-thumb-body';
+    bodyEl.style.color = slide.fontColor || '#fff';
+    bodyEl.style.fontFamily = slide.fontFamily || 'Georgia';
+    bodyEl.textContent = slide.body.length > 50 ? slide.body.substring(0, 50) + '...' : slide.body;
+    preview.appendChild(bodyEl);
+  }
+  
+  const badge = document.createElement('div');
+  badge.className = 'quick-slide-badge';
+  badge.textContent = 'QS';
+  preview.appendChild(badge);
+  
+  container.appendChild(preview);
 }
 
 function checkImageWarnings(imgWidth, imgHeight) {
@@ -638,17 +1425,24 @@ function selectImage(imagePath) {
 }
 
 function selectMedia(file) {
-  selectedImage = file.path;
+  const itemId = file.path || file.id;
+  selectedImage = itemId;
   document.querySelectorAll('.thumbnail-item').forEach(item => {
-    item.classList.toggle('selected', item.dataset.path === file.path);
+    item.classList.toggle('selected', item.dataset.path === itemId);
   });
   
-  const displayName = file.displayName || path.basename(file.path).replace(/\.[^/.]+$/, '');
-  
-  if (file.type === 'video') {
-    staged = createSingleVideo(file.path, displayName);
+  if (file.type === 'quick-slide') {
+    staged = { ...file };
   } else {
-    staged = createSingleImage(file.path, displayName);
+    const displayName = file.displayName || path.basename(file.path).replace(/\.[^/.]+$/, '');
+    
+    if (file.type === 'video') {
+      staged = createSingleVideo(file.path, displayName);
+    } else if (file.type === 'audio') {
+      staged = createSingleAudio(file.path, displayName);
+    } else {
+      staged = createSingleImage(file.path, displayName);
+    }
   }
   isSynced = false;
   
@@ -673,10 +1467,24 @@ function setupSlideshowControls() {
 
   updatePresetDropdown();
 
-  presetSelect.addEventListener('change', () => {
+  presetSelect.addEventListener('change', async () => {
     const presetId = presetSelect.value;
     if (presetId) {
-      currentPreset = slideshowPresets.find(p => p.id === presetId);
+      const preset = slideshowPresets.find(p => p.id === presetId);
+      const brokenImages = preset.images.filter(img => isPathBroken(img.path));
+      
+      if (brokenImages.length > 0) {
+        await ipcRenderer.invoke(IPC.CONFIRM_DIALOG, {
+          type: 'warning',
+          title: 'Cannot Load Preset',
+          message: `"${preset.name}" has ${brokenImages.length} missing file(s). Please fix broken links in the Media Library first.`,
+          buttons: ['OK']
+        });
+        presetSelect.value = currentPreset?.id || '';
+        return;
+      }
+      
+      currentPreset = preset;
       loadPresetToStaged();
     } else {
       currentPreset = null;
@@ -1048,6 +1856,695 @@ function setupVideoTransportControls() {
       }
     }
   });
+  
+  ipcRenderer.on(IPC.IMAGE_ERROR, (event, imagePath) => {
+    brokenPaths.add(imagePath);
+    if (live?.type === 'slideshow') {
+      advanceLiveSlide();
+    } else if (live?.type === 'single-image' && live.path === imagePath) {
+      ipcRenderer.send(IPC.SHOW_STANDBY);
+      live = createStandby();
+      updateLiveDisplay();
+    }
+    renderImageGrid();
+  });
+  
+  ipcRenderer.on(IPC.VIDEO_ERROR, (event, videoPath) => {
+    brokenPaths.add(videoPath);
+    if (live?.type === 'slideshow') {
+      live.waitingForVideo = false;
+      advanceLiveSlide();
+    } else if (live?.type === 'single-video' && live.path === videoPath) {
+      ipcRenderer.send(IPC.SHOW_STANDBY);
+      live = createStandby();
+      updateLiveDisplay();
+    }
+    renderImageGrid();
+  });
+}
+
+function setupAudioTransportControls() {
+  const previewPlayBtn = document.getElementById('previewAudioPlayBtn');
+  const previewSlider = document.getElementById('previewAudioSlider');
+  const livePlayBtn = document.getElementById('liveAudioPlayBtn');
+  const liveRestartBtn = document.getElementById('liveAudioRestartBtn');
+  const liveStopBtn = document.getElementById('liveAudioStopBtn');
+  const liveSlider = document.getElementById('liveAudioSlider');
+  
+  previewPlayBtn.addEventListener('click', () => {
+    if (!previewAudio) return;
+    if (previewAudio.paused) {
+      previewAudio.play();
+      previewPlayBtn.textContent = '⏸️';
+    } else {
+      previewAudio.pause();
+      previewPlayBtn.textContent = '▶️';
+    }
+    if (live?.type === 'single-audio') {
+      isSynced = false;
+      updateGoLiveButton();
+    }
+  });
+  
+  previewSlider.addEventListener('input', () => {
+    if (!previewAudio || !previewAudio.duration) return;
+    const time = (previewSlider.value / 100) * previewAudio.duration;
+    previewAudio.currentTime = time;
+    previewSlider.style.setProperty('--progress', previewSlider.value + '%');
+    if (staged?.type === 'single-audio') {
+      staged.currentTime = time;
+      isSynced = false;
+      updateGoLiveButton();
+    }
+  });
+  
+  livePlayBtn.addEventListener('click', () => {
+    if (live?.type !== 'single-audio') return;
+    if (liveAudioState?.paused) {
+      ipcRenderer.send(IPC.CONTROL_AUDIO, 'play');
+      if (isSynced && staged?.type === 'single-audio' && previewAudio) {
+        previewAudio.play();
+      }
+    } else {
+      ipcRenderer.send(IPC.CONTROL_AUDIO, 'pause');
+      if (isSynced && staged?.type === 'single-audio' && previewAudio) {
+        previewAudio.pause();
+      }
+    }
+  });
+  
+  liveRestartBtn.addEventListener('click', () => {
+    if (live?.type !== 'single-audio') return;
+    ipcRenderer.send(IPC.CONTROL_AUDIO, 'restart');
+    if (isSynced && staged?.type === 'single-audio' && previewAudio) {
+      previewAudio.currentTime = 0;
+      staged.currentTime = 0;
+      previewAudio.play();
+      updatePreviewAudioUI();
+    }
+  });
+  
+  liveStopBtn.addEventListener('click', () => {
+    if (live?.type !== 'single-audio') return;
+    const wasSynced = isSynced;
+    stopLiveAudio();
+    ipcRenderer.send(IPC.SHOW_STANDBY);
+    live = createStandby();
+    isSynced = false;
+    if (wasSynced) {
+      staged = null;
+      cleanupPreviewAudio();
+      updatePreviewDisplay();
+    }
+    updateLiveDisplay();
+    updateGoLiveButton();
+    updateAudioTransportUI();
+  });
+  
+  liveSlider.addEventListener('input', () => {
+    if (live?.type !== 'single-audio' || !liveAudioState?.duration) return;
+    const time = (liveSlider.value / 100) * liveAudioState.duration;
+    ipcRenderer.send(IPC.CONTROL_AUDIO, 'seek', time);
+    liveSlider.style.setProperty('--progress', liveSlider.value + '%');
+    if (isSynced && staged?.type === 'single-audio' && previewAudio) {
+      previewAudio.currentTime = time;
+      staged.currentTime = time;
+    }
+  });
+  
+  ipcRenderer.on(IPC.AUDIO_STATE, (event, state) => {
+    if (live?.type !== 'single-audio') {
+      return;
+    }
+    
+    if (state.stopped) {
+      if (live.path === state.path) {
+        live = createStandby();
+        updateLiveDisplay();
+        updateGoLiveButton();
+      }
+      return;
+    }
+    
+    liveAudioState = state;
+    updateLiveAudioUI();
+    
+    if (isSynced && staged?.type === 'single-audio' && previewAudio) {
+      if (state.playing && previewAudio.paused) {
+        previewAudio.play();
+      } else if (state.paused && !previewAudio.paused) {
+        previewAudio.pause();
+      }
+      
+      if (state.playing) {
+        previewAudio.currentTime = state.currentTime;
+        staged.currentTime = state.currentTime;
+        updatePreviewAudioUI();
+      }
+    }
+  });
+}
+
+function setupScriptureControls() {
+  const compareModeCheckbox = document.getElementById('compareModeCheckbox');
+  const compareVersionRow = document.getElementById('compareVersionRow');
+  
+  compareModeCheckbox.addEventListener('change', () => {
+    if (compareModeCheckbox.checked) {
+      compareVersionRow.classList.add('visible');
+    } else {
+      compareVersionRow.classList.remove('visible');
+    }
+  });
+  
+  const scriptureTextInput = document.getElementById('scriptureTextInput');
+  const parsePreview = document.getElementById('parsePreview');
+  const lookupTextBtn = document.getElementById('lookupTextBtn');
+  
+  scriptureTextInput.addEventListener('input', () => {
+    const val = scriptureTextInput.value.trim();
+    if (val) {
+      parsePreview.textContent = `Will lookup: "${val}"`;
+      parsePreview.style.color = '#888';
+    } else {
+      parsePreview.textContent = '';
+    }
+  });
+  
+  scriptureTextInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      lookupTextBtn.click();
+    }
+  });
+  
+  lookupTextBtn.addEventListener('click', async () => {
+    const reference = scriptureTextInput.value.trim();
+    if (!reference) return;
+    
+    const bibleId = document.getElementById('bibleVersionSelect').value;
+    const compareMode = compareModeCheckbox.checked;
+    const bibleId2 = compareMode ? document.getElementById('bibleVersion2Select').value : null;
+    
+    parsePreview.textContent = 'Looking up...';
+    parsePreview.style.color = '#888';
+    lookupTextBtn.disabled = true;
+    
+    const result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { reference, bibleId, bibleId2 });
+    
+    lookupTextBtn.disabled = false;
+    
+    if (result.error) {
+      parsePreview.textContent = result.error;
+      parsePreview.style.color = '#e94560';
+      return;
+    }
+    
+    parsePreview.textContent = `✓ ${result.reference} (${result.version})`;
+    parsePreview.style.color = '#4ade80';
+    
+    staged = createScripture(
+      result.reference,
+      result.text,
+      result.version,
+      result.bibleId,
+      result.bookId,
+      result.chapter,
+      result.verse,
+      result.compareText,
+      result.compareVersion,
+      result.bibleId2
+    );
+    isSynced = false;
+    
+    fetchAndCacheChapter(result.bibleId, result.bookId, result.chapter).then(() => {
+      prefetchNearbyChapter(result.bibleId, result.bookId, result.chapter, result.verse, result.bibleId2);
+    });
+    if (result.bibleId2) {
+      fetchAndCacheChapter(result.bibleId2, result.bookId, result.chapter).catch(() => {});
+    }
+    
+    addToRecentScriptures(result);
+    updatePreviewDisplay();
+    updateGoLiveButton();
+    updateTransportUI();
+  });
+  
+  const pinCurrentBtn = document.getElementById('pinCurrentBtn');
+  pinCurrentBtn.addEventListener('click', async () => {
+    if (staged?.type !== 'scripture') return;
+    
+    const pinned = settings.pinnedScriptures || [];
+    const exists = pinned.some(p => 
+      p.reference === staged.reference && p.bibleId === staged.bibleId
+    );
+    
+    if (exists) return;
+    
+    const newPin = {
+      reference: staged.reference,
+      bookId: staged.bookId,
+      chapter: staged.chapter,
+      verse: staged.verse,
+      bibleId: staged.bibleId,
+      version: staged.version,
+      text: staged.text,
+      compareText: staged.compareText,
+      compareVersion: staged.compareVersion,
+      bibleId2: staged.bibleId2
+    };
+    
+    pinned.unshift(newPin);
+    if (pinned.length > 10) pinned.pop();
+    
+    settings.pinnedScriptures = pinned;
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { pinnedScriptures: pinned });
+    renderScriptureLists();
+  });
+  
+  const bookSelect = document.getElementById('bookSelect');
+  const chapterSelect = document.getElementById('chapterSelect');
+  const verseSelect = document.getElementById('verseSelect');
+  const lookupManualBtn = document.getElementById('lookupManualBtn');
+  
+  async function loadBooks() {
+    const bibleId = document.getElementById('bibleVersionSelect').value;
+    const books = await ipcRenderer.invoke(IPC.GET_BIBLE_BOOKS, bibleId);
+    if (books.error) {
+      bookSelect.innerHTML = '<option value="">Error loading</option>';
+      return;
+    }
+    bookSelect.innerHTML = '<option value="">Book...</option>' + 
+      books.map(b => `<option value="${b.id}">${b.name}</option>`).join('');
+  }
+  
+  loadBooks();
+  
+  document.getElementById('bibleVersionSelect').addEventListener('change', () => {
+    loadBooks();
+    chapterSelect.innerHTML = '<option value="">Ch...</option>';
+    chapterSelect.disabled = true;
+    verseSelect.innerHTML = '<option value="">Vs...</option>';
+    verseSelect.disabled = true;
+    lookupManualBtn.disabled = true;
+  });
+  
+  bookSelect.addEventListener('change', async () => {
+    const bookId = bookSelect.value;
+    if (!bookId) {
+      chapterSelect.innerHTML = '<option value="">Ch...</option>';
+      chapterSelect.disabled = true;
+      verseSelect.innerHTML = '<option value="">Vs...</option>';
+      verseSelect.disabled = true;
+      lookupManualBtn.disabled = true;
+      return;
+    }
+    
+    const bibleId = document.getElementById('bibleVersionSelect').value;
+    const chapters = await ipcRenderer.invoke(IPC.GET_CHAPTERS, bibleId, bookId);
+    if (chapters.error) {
+      chapterSelect.innerHTML = '<option value="">Error</option>';
+      return;
+    }
+    chapterSelect.innerHTML = '<option value="">Ch...</option>' + 
+      chapters.map(c => `<option value="${c.id}">${c.number}</option>`).join('');
+    chapterSelect.disabled = false;
+    verseSelect.innerHTML = '<option value="">Vs...</option>';
+    verseSelect.disabled = true;
+    lookupManualBtn.disabled = true;
+  });
+  
+  chapterSelect.addEventListener('change', async () => {
+    const chapterId = chapterSelect.value;
+    if (!chapterId) {
+      verseSelect.innerHTML = '<option value="">Vs...</option>';
+      verseSelect.disabled = true;
+      lookupManualBtn.disabled = true;
+      return;
+    }
+    
+    const bibleId = document.getElementById('bibleVersionSelect').value;
+    const verses = await ipcRenderer.invoke(IPC.GET_VERSES, bibleId, chapterId);
+    if (verses.error) {
+      verseSelect.innerHTML = '<option value="">Error</option>';
+      return;
+    }
+    verseSelect.innerHTML = '<option value="">Vs...</option>' + 
+      verses.map(v => `<option value="${v.id}">${v.number}</option>`).join('');
+    verseSelect.disabled = false;
+    lookupManualBtn.disabled = true;
+  });
+  
+  verseSelect.addEventListener('change', () => {
+    lookupManualBtn.disabled = !verseSelect.value;
+  });
+  
+  lookupManualBtn.addEventListener('click', async () => {
+    const verseId = verseSelect.value;
+    if (!verseId) return;
+    
+    const bibleId = document.getElementById('bibleVersionSelect').value;
+    const compareMode = compareModeCheckbox.checked;
+    const bibleId2 = compareMode ? document.getElementById('bibleVersion2Select').value : null;
+    
+    lookupManualBtn.disabled = true;
+    parsePreview.textContent = 'Looking up...';
+    parsePreview.style.color = '#888';
+    
+    const result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { 
+      reference: verseId,
+      bibleId, 
+      bibleId2 
+    });
+    
+    lookupManualBtn.disabled = false;
+    
+    if (result.error) {
+      parsePreview.textContent = result.error;
+      parsePreview.style.color = '#e94560';
+      return;
+    }
+    
+    parsePreview.textContent = `✓ ${result.reference} (${result.version})`;
+    parsePreview.style.color = '#4ade80';
+    
+    staged = createScripture(
+      result.reference, result.text, result.version, result.bibleId,
+      result.bookId, result.chapter, result.verse,
+      result.compareText, result.compareVersion, result.bibleId2
+    );
+    isSynced = false;
+    
+    fetchAndCacheChapter(result.bibleId, result.bookId, result.chapter).then(() => {
+      prefetchNearbyChapter(result.bibleId, result.bookId, result.chapter, result.verse, result.bibleId2);
+    });
+    if (result.bibleId2) {
+      fetchAndCacheChapter(result.bibleId2, result.bookId, result.chapter).catch(() => {});
+    }
+    
+    addToRecentScriptures(result);
+    updatePreviewDisplay();
+    updateGoLiveButton();
+    updateTransportUI();
+  });
+  
+  const clearRecentsBtn = document.getElementById('clearRecentsBtn');
+  clearRecentsBtn.addEventListener('click', async () => {
+    settings.recentScriptures = [];
+    await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { recentScriptures: [] });
+    renderScriptureLists();
+  });
+  
+  renderScriptureLists();
+}
+
+function addToRecentScriptures(result) {
+  const recent = settings.recentScriptures || [];
+  const filtered = recent.filter(r => 
+    !(r.reference === result.reference && r.bibleId === result.bibleId)
+  );
+  
+  filtered.unshift({
+    reference: result.reference,
+    bookId: result.bookId,
+    chapter: result.chapter,
+    verse: result.verse,
+    bibleId: result.bibleId,
+    version: result.version,
+    text: result.text
+  });
+  
+  if (filtered.length > 3) filtered.pop();
+  
+  settings.recentScriptures = filtered;
+  ipcRenderer.invoke(IPC.SAVE_SETTINGS, { recentScriptures: filtered });
+  renderScriptureLists();
+}
+
+function renderScriptureLists() {
+  const pinnedList = document.getElementById('pinnedScripturesList');
+  const recentList = document.getElementById('recentScripturesList');
+  const pinBtn = document.getElementById('pinCurrentBtn');
+  
+  pinBtn.disabled = !(staged?.type === 'scripture');
+  
+  const pinned = settings.pinnedScriptures || [];
+  if (pinned.length === 0) {
+    pinnedList.innerHTML = '<div class="empty-list">No pinned scriptures</div>';
+  } else {
+    pinnedList.innerHTML = pinned.map((p, i) => `
+      <div class="scripture-item" data-type="pinned" data-index="${i}">
+        <span class="scripture-ref">${p.reference}</span>
+        <span class="scripture-version">${p.version}</span>
+        <button class="remove-pin" data-index="${i}">×</button>
+      </div>
+    `).join('');
+  }
+  
+  const recent = settings.recentScriptures || [];
+  if (recent.length === 0) {
+    recentList.innerHTML = '<div class="empty-list">No recent lookups</div>';
+  } else {
+    recentList.innerHTML = recent.map((r, i) => `
+      <div class="scripture-item" data-type="recent" data-index="${i}">
+        <span class="scripture-ref">${r.reference}</span>
+        <span class="scripture-version">${r.version}</span>
+      </div>
+    `).join('');
+  }
+  
+  pinnedList.querySelectorAll('.scripture-item').forEach(item => {
+    item.addEventListener('click', (e) => {
+      if (e.target.classList.contains('remove-pin')) return;
+      const idx = parseInt(item.dataset.index, 10);
+      loadPinnedScripture(idx);
+    });
+  });
+  
+  pinnedList.querySelectorAll('.remove-pin').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const idx = parseInt(btn.dataset.index, 10);
+      settings.pinnedScriptures.splice(idx, 1);
+      await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { pinnedScriptures: settings.pinnedScriptures });
+      renderScriptureLists();
+    });
+  });
+  
+  recentList.querySelectorAll('.scripture-item').forEach(item => {
+    item.addEventListener('click', () => {
+      const idx = parseInt(item.dataset.index, 10);
+      loadRecentScripture(idx);
+    });
+  });
+}
+
+function loadPinnedScripture(index) {
+  const pinned = settings.pinnedScriptures || [];
+  const p = pinned[index];
+  if (!p) return;
+  
+  staged = createScripture(
+    p.reference, p.text, p.version, p.bibleId,
+    p.bookId, p.chapter, p.verse,
+    p.compareText, p.compareVersion, p.bibleId2
+  );
+  isSynced = false;
+  
+  fetchAndCacheChapter(p.bibleId, p.bookId, p.chapter).then(() => {
+    prefetchNearbyChapter(p.bibleId, p.bookId, p.chapter, p.verse, p.bibleId2);
+  });
+  if (p.bibleId2) {
+    fetchAndCacheChapter(p.bibleId2, p.bookId, p.chapter).catch(() => {});
+  }
+  
+  updatePreviewDisplay();
+  updateGoLiveButton();
+  updateTransportUI();
+}
+
+function loadRecentScripture(index) {
+  const recent = settings.recentScriptures || [];
+  const r = recent[index];
+  if (!r) return;
+  
+  staged = createScripture(
+    r.reference, r.text, r.version, r.bibleId,
+    r.bookId, r.chapter, r.verse
+  );
+  isSynced = false;
+  
+  fetchAndCacheChapter(r.bibleId, r.bookId, r.chapter).then(() => {
+    prefetchNearbyChapter(r.bibleId, r.bookId, r.chapter, r.verse, null);
+  });
+  
+  updatePreviewDisplay();
+  updateGoLiveButton();
+  updateTransportUI();
+}
+
+async function navigateVerse(direction) {
+  if (!staged || staged.type !== 'scripture') return;
+  
+  const parsePreview = document.getElementById('parsePreview');
+  const bibleId = staged.bibleId;
+  const bibleId2 = staged.bibleId2;
+  
+  let targetBook = staged.bookId;
+  let targetChapter = staged.chapter;
+  let targetVerse = staged.verse + direction;
+  
+  parsePreview.textContent = 'Navigating...';
+  parsePreview.style.color = '#888';
+  
+  if (targetVerse < 1) {
+    const prevChapterKey = getCacheKey(bibleId, targetBook, targetChapter - 1);
+    const prevChapterCached = chapterCache.get(prevChapterKey);
+    
+    if (prevChapterCached && targetChapter > 1) {
+      targetChapter = targetChapter - 1;
+      targetVerse = prevChapterCached.verseCount || Object.keys(prevChapterCached.verses).length;
+    } else {
+      const info = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+      if (info.error) {
+        parsePreview.textContent = info.error;
+        parsePreview.style.color = '#e94560';
+        return;
+      }
+      
+      const bookOrder = info.bookOrder;
+      const bookIndex = bookOrder.indexOf(targetBook);
+      
+      if (targetChapter > 1) {
+        targetChapter = targetChapter - 1;
+        const prevChapterInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+        if (prevChapterInfo.error || !prevChapterInfo.lastVerse) {
+          parsePreview.textContent = 'Could not navigate';
+          parsePreview.style.color = '#e94560';
+          return;
+        }
+        targetVerse = prevChapterInfo.lastVerse;
+      } else if (bookIndex > 0) {
+        targetBook = bookOrder[bookIndex - 1];
+        const prevBookInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, 1);
+        if (prevBookInfo.error) {
+          parsePreview.textContent = 'Could not navigate';
+          parsePreview.style.color = '#e94560';
+          return;
+        }
+        targetChapter = prevBookInfo.chapterCount;
+        const lastChapterInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+        if (lastChapterInfo.error || !lastChapterInfo.lastVerse) {
+          parsePreview.textContent = 'Could not navigate';
+          parsePreview.style.color = '#e94560';
+          return;
+        }
+        targetVerse = lastChapterInfo.lastVerse;
+      } else {
+        parsePreview.textContent = 'Beginning of Bible';
+        parsePreview.style.color = '#888';
+        return;
+      }
+    }
+  }
+  
+  let result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+  
+  if (!result) {
+    await fetchAndCacheChapter(bibleId, targetBook, targetChapter);
+    if (bibleId2) {
+      await fetchAndCacheChapter(bibleId2, targetBook, targetChapter);
+    }
+    result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+  }
+  
+  if (!result && direction > 0) {
+    const cacheKey = getCacheKey(bibleId, targetBook, targetChapter);
+    const cachedChapter = chapterCache.get(cacheKey);
+    if (cachedChapter) {
+      const verseCount = cachedChapter.verseCount || Object.keys(cachedChapter.verses).length;
+      if (targetVerse > verseCount) {
+        result = { error: 'Verse not found' };
+      }
+    }
+  }
+  
+  if (!result) {
+    result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { 
+      reference: `${targetBook}.${targetChapter}.${targetVerse}`,
+      bibleId, 
+      bibleId2 
+    });
+  }
+  
+  if (result.error && result.error.includes('not found') && direction > 0) {
+    const nextChapterKey = getCacheKey(bibleId, targetBook, targetChapter + 1);
+    const nextChapterCached = chapterCache.get(nextChapterKey);
+    
+    if (nextChapterCached && nextChapterCached.verses[1]) {
+      targetChapter = targetChapter + 1;
+      targetVerse = 1;
+      result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+    } else {
+      const info = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+      if (!info.error) {
+        const bookOrder = info.bookOrder;
+        const bookIndex = bookOrder.indexOf(targetBook);
+        
+        if (targetChapter < info.chapterCount) {
+          targetChapter = targetChapter + 1;
+          targetVerse = 1;
+        } else if (bookIndex < bookOrder.length - 1) {
+          targetBook = bookOrder[bookIndex + 1];
+          targetChapter = 1;
+          targetVerse = 1;
+        } else {
+          parsePreview.textContent = 'End of Bible';
+          parsePreview.style.color = '#888';
+          return;
+        }
+        
+        result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+        
+        if (!result) {
+          await fetchAndCacheChapter(bibleId, targetBook, targetChapter);
+          if (bibleId2) {
+            await fetchAndCacheChapter(bibleId2, targetBook, targetChapter);
+          }
+          result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+        }
+        
+        if (!result) {
+          result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { 
+            reference: `${targetBook}.${targetChapter}.${targetVerse}`,
+            bibleId, 
+            bibleId2 
+          });
+        }
+      }
+    }
+  }
+  
+  if (result.error) {
+    parsePreview.textContent = result.error;
+    parsePreview.style.color = '#e94560';
+    return;
+  }
+  
+  parsePreview.textContent = `✓ ${result.reference} (${result.version})`;
+  parsePreview.style.color = '#4ade80';
+  
+  staged = createScripture(
+    result.reference, result.text, result.version, result.bibleId,
+    result.bookId, result.chapter, result.verse,
+    result.compareText, result.compareVersion, result.bibleId2
+  );
+  isSynced = false;
+  
+  prefetchNearbyChapter(bibleId, result.bookId, result.chapter, result.verse, bibleId2);
+  
+  updatePreviewDisplay();
+  updateGoLiveButton();
+  updateTransportUI();
 }
 
 function setupPreviewVideoEvents() {
@@ -1076,6 +2573,32 @@ function setupPreviewVideoEvents() {
   };
 }
 
+function setupPreviewAudioEvents() {
+  if (!previewAudio) return;
+  
+  previewAudio.onloadedmetadata = () => {
+    if (staged?.type === 'single-audio') {
+      staged.duration = previewAudio.duration;
+    }
+    updatePreviewAudioUI();
+  };
+  
+  previewAudio.ontimeupdate = () => {
+    if (staged?.type === 'single-audio') {
+      staged.currentTime = previewAudio.currentTime;
+    }
+    updatePreviewAudioUI();
+  };
+  
+  previewAudio.onplay = () => {
+    document.getElementById('previewAudioPlayBtn').textContent = '⏸️';
+  };
+  
+  previewAudio.onpause = () => {
+    document.getElementById('previewAudioPlayBtn').textContent = '▶️';
+  };
+}
+
 function cleanupPreviewVideo() {
   if (previewVideo) {
     previewVideo.pause();
@@ -1084,11 +2607,26 @@ function cleanupPreviewVideo() {
   }
 }
 
+function cleanupPreviewAudio() {
+  if (previewAudio) {
+    previewAudio.pause();
+    previewAudio.src = '';
+    previewAudio = null;
+  }
+}
+
 function stopLiveVideo() {
   if (live?.type === 'single-video') {
     ipcRenderer.send(IPC.CONTROL_VIDEO, 'stop');
   }
   liveVideoState = null;
+}
+
+function stopLiveAudio() {
+  if (live?.type === 'single-audio') {
+    ipcRenderer.send(IPC.CONTROL_AUDIO, 'stop');
+  }
+  liveAudioState = null;
 }
 
 function formatTime(seconds) {
@@ -1133,6 +2671,41 @@ function updateLiveVideoUI() {
   playBtn.textContent = liveVideoState.paused ? '▶️' : '⏸️';
 }
 
+function updatePreviewAudioUI() {
+  if (!previewAudio) return;
+  const timeEl = document.getElementById('previewAudioTime');
+  const durationEl = document.getElementById('previewAudioDuration');
+  const slider = document.getElementById('previewAudioSlider');
+  
+  timeEl.textContent = formatTime(previewAudio.currentTime);
+  durationEl.textContent = formatTime(previewAudio.duration);
+  
+  if (previewAudio.duration) {
+    const progress = (previewAudio.currentTime / previewAudio.duration) * 100;
+    slider.value = progress;
+    slider.style.setProperty('--progress', progress + '%');
+  }
+}
+
+function updateLiveAudioUI() {
+  if (!liveAudioState) return;
+  const timeEl = document.getElementById('liveAudioTime');
+  const durationEl = document.getElementById('liveAudioDuration');
+  const slider = document.getElementById('liveAudioSlider');
+  const playBtn = document.getElementById('liveAudioPlayBtn');
+  
+  timeEl.textContent = formatTime(liveAudioState.currentTime);
+  durationEl.textContent = formatTime(liveAudioState.duration);
+  
+  if (liveAudioState.duration) {
+    const progress = (liveAudioState.currentTime / liveAudioState.duration) * 100;
+    slider.value = progress;
+    slider.style.setProperty('--progress', progress + '%');
+  }
+  
+  playBtn.textContent = liveAudioState.paused ? '▶️' : '⏸️';
+}
+
 function updateVideoTransportUI() {
   const previewTransport = document.getElementById('previewVideoTransport');
   const liveTransport = document.getElementById('liveVideoTransport');
@@ -1142,6 +2715,17 @@ function updateVideoTransportUI() {
   
   previewTransport.classList.toggle('visible', showPreviewVideo);
   liveTransport.classList.toggle('visible', showLiveVideo);
+}
+
+function updateAudioTransportUI() {
+  const previewTransport = document.getElementById('previewAudioTransport');
+  const liveTransport = document.getElementById('liveAudioTransport');
+  
+  const showPreviewAudio = staged?.type === 'single-audio';
+  const showLiveAudio = live?.type === 'single-audio';
+  
+  previewTransport.classList.toggle('visible', showPreviewAudio);
+  liveTransport.classList.toggle('visible', showLiveAudio);
 }
 
 function getStagedSlideshowQueue() {
@@ -1182,13 +2766,18 @@ function applyPendingQueueChanges() {
   if (staged?.type !== 'slideshow') return;
   
   staged.pendingAdds.forEach(img => {
-    if (!staged.queue.some(q => q.path === img.path)) {
+    const matchFn = img.type === 'quick-slide' 
+      ? (q) => q.type === 'quick-slide' && q.id === img.id
+      : (q) => q.path === img.path;
+    if (!staged.queue.some(matchFn)) {
       staged.queue.push(img);
     }
   });
   
-  staged.pendingRemoves.forEach(imgPath => {
-    const idx = staged.queue.findIndex(q => q.path === imgPath);
+  staged.pendingRemoves.forEach(itemId => {
+    const idx = staged.queue.findIndex(q => {
+      return q.type === 'quick-slide' ? q.id === itemId : q.path === itemId;
+    });
     if (idx >= 0) {
       staged.queue.splice(idx, 1);
     }
@@ -1202,12 +2791,37 @@ function applyPendingQueueChanges() {
   }
 }
 
-function showCurrentLiveSlide() {
+function showCurrentLiveSlide(skipAttempts = 0) {
   if (live?.type !== 'slideshow' || live.queue.length === 0) return;
+  
+  if (skipAttempts >= live.queue.length) {
+    handleNaturalSlideshowEnd();
+    return;
+  }
   
   const currentItem = live.queue[live.index];
   
-  if (currentItem.type === 'video') {
+  if (currentItem.type !== 'quick-slide' && isPathBroken(currentItem.path)) {
+    advanceLiveSlide(skipAttempts + 1);
+    return;
+  }
+  
+  if (currentItem.type === 'quick-slide') {
+    ipcRenderer.send(IPC.SHOW_QUICK_SLIDE, {
+      preset: currentItem.preset,
+      title: currentItem.title,
+      body: currentItem.body,
+      background: currentItem.background,
+      backgroundImage: currentItem.backgroundImage,
+      fontFamily: currentItem.fontFamily,
+      fontSize: currentItem.fontSize,
+      fontColor: currentItem.fontColor
+    });
+    live.waitingForVideo = false;
+    if (!live.paused && !live.timer) {
+      startLiveTimer();
+    }
+  } else if (currentItem.type === 'video') {
     if (live.timer) {
       clearInterval(live.timer);
       live.timer = null;
@@ -1253,7 +2867,7 @@ function stopLiveSlideshowTimer() {
   }
 }
 
-function advanceLiveSlide() {
+function advanceLiveSlide(skipAttempts = 0) {
   if (live?.type !== 'slideshow') return;
   if (live.waitingForVideo) return;
   
@@ -1273,7 +2887,7 @@ function advanceLiveSlide() {
     staged.index = live.index;
   }
   
-  showCurrentLiveSlide();
+  showCurrentLiveSlide(skipAttempts);
 }
 
 function handleNaturalSlideshowEnd() {
@@ -1341,7 +2955,15 @@ function updatePresetDropdown() {
   slideshowPresets.forEach(preset => {
     const option = document.createElement('option');
     option.value = preset.id;
-    option.textContent = preset.name;
+    
+    const hasBroken = preset.images.some(img => isPathBroken(img.path));
+    if (hasBroken) {
+      option.textContent = '⚠ ' + preset.name;
+      option.classList.add('has-broken');
+    } else {
+      option.textContent = preset.name;
+    }
+    
     if (currentPreset && currentPreset.id === preset.id) {
       option.selected = true;
     }
@@ -1465,11 +3087,20 @@ function createQueueItem(img, index, isStagedSlideshow, isLiveSlideshow, isPendi
   const item = document.createElement('div');
   item.className = 'queue-item';
   
+  const isQuickSlide = img.type === 'quick-slide';
+  const itemId = isQuickSlide ? img.id : img.path;
+  const isBroken = !isQuickSlide && isPathBroken(img.path);
+  if (isBroken) {
+    item.classList.add('broken');
+  }
+  
   const stagedIndex = staged?.type === 'slideshow' ? staged.index : -1;
   const liveIndex = live?.type === 'slideshow' ? live.index : -1;
   
   const isStagedIndex = isStagedSlideshow && index === stagedIndex;
-  const isLiveIndex = isLiveSlideshow && live.queue[liveIndex]?.path === img.path;
+  const liveItem = isLiveSlideshow && live.queue[liveIndex];
+  const liveItemId = liveItem ? (liveItem.type === 'quick-slide' ? liveItem.id : liveItem.path) : null;
+  const isLiveIndex = liveItemId === itemId;
   
   if (isPendingAdd) {
     item.classList.add('pending-add');
@@ -1484,27 +3115,57 @@ function createQueueItem(img, index, isStagedSlideshow, isLiveSlideshow, isPendi
     item.classList.add('live');
   }
   
-  item.draggable = !isLiveSlideshow && !isPendingAdd && !isPendingRemove;
+  item.draggable = !isLiveSlideshow && !isPendingAdd && !isPendingRemove && !isBroken;
   item.dataset.index = index;
-  item.dataset.path = img.path;
+  item.dataset.path = itemId;
+  item.dataset.type = img.type;
   
-  const thumb = document.createElement('img');
-  thumb.className = 'queue-thumb';
+  let thumb;
   
-  if (img.type === 'video') {
-    ipcRenderer.invoke(IPC.GET_THUMBNAIL, img.path).then(thumbnailPath => {
-      if (thumbnailPath) {
-        thumb.src = 'file://' + thumbnailPath;
-      } else {
-        thumb.style.background = '#333';
-      }
-    });
-    const videoBadge = document.createElement('div');
-    videoBadge.className = 'video-badge';
-    videoBadge.innerHTML = '▶';
-    item.appendChild(videoBadge);
+  if (isQuickSlide) {
+    thumb = document.createElement('div');
+    thumb.className = 'queue-thumb quick-slide-queue-thumb';
+    if (img.backgroundImage) {
+      thumb.style.backgroundImage = `url('file:///${img.backgroundImage.replace(/\\/g, '/')}')`;
+      thumb.style.backgroundSize = 'cover';
+    } else {
+      thumb.style.backgroundColor = img.background || '#000';
+    }
+    const bodyPreview = document.createElement('div');
+    bodyPreview.style.cssText = `font-size:8px;color:${img.fontColor || '#fff'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px;`;
+    bodyPreview.textContent = img.body?.substring(0, 15) || '';
+    thumb.appendChild(bodyPreview);
+    const badge = document.createElement('div');
+    badge.className = 'quick-slide-badge';
+    badge.textContent = img.preset.charAt(0).toUpperCase();
+    badge.style.cssText = 'position:absolute;top:2px;right:2px;width:14px;height:14px;background:rgba(0,0,0,0.6);color:#fff;border-radius:50%;font-size:8px;display:flex;align-items:center;justify-content:center;';
+    item.appendChild(badge);
   } else {
-    thumb.src = 'file://' + img.path;
+    thumb = document.createElement('img');
+    thumb.className = 'queue-thumb';
+  
+    if (isBroken) {
+      thumb.style.background = '#333';
+      const brokenBadge = document.createElement('span');
+      brokenBadge.className = 'broken-badge';
+      brokenBadge.innerHTML = '!';
+      brokenBadge.title = 'File not found';
+      item.appendChild(brokenBadge);
+    } else if (img.type === 'video') {
+      ipcRenderer.invoke(IPC.GET_THUMBNAIL, img.path).then(thumbnailPath => {
+        if (thumbnailPath) {
+          thumb.src = 'file://' + thumbnailPath;
+        } else {
+          thumb.style.background = '#333';
+        }
+      });
+      const videoBadge = document.createElement('div');
+      videoBadge.className = 'video-badge';
+      videoBadge.innerHTML = '▶';
+      item.appendChild(videoBadge);
+    } else {
+      thumb.src = 'file://' + img.path;
+    }
   }
   
   const indexBadge = document.createElement('span');
@@ -1528,7 +3189,7 @@ function createQueueItem(img, index, isStagedSlideshow, isLiveSlideshow, isPendi
   removeBtn.innerHTML = '×';
   removeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    handleQueueItemRemove(img.path, isPendingAdd);
+    handleQueueItemRemove(itemId, isPendingAdd, isQuickSlide);
   });
   
   item.appendChild(thumb);
@@ -1588,23 +3249,25 @@ function createQueueItem(img, index, isStagedSlideshow, isLiveSlideshow, isPendi
   return item;
 }
 
-function handleQueueItemRemove(imgPath, isPendingAdd) {
+function handleQueueItemRemove(itemId, isPendingAdd, isQuickSlide) {
+  const matchFn = (q) => isQuickSlide ? q.id === itemId : q.path === itemId;
+  
   if (isPendingAdd) {
     if (staged?.type === 'slideshow') {
-      const idx = staged.pendingAdds.findIndex(img => img.path === imgPath);
+      const idx = staged.pendingAdds.findIndex(matchFn);
       if (idx >= 0) {
         staged.pendingAdds.splice(idx, 1);
         updateQueueButton();
       }
     }
   } else if (live?.type === 'slideshow') {
-    if (staged?.type === 'slideshow' && !staged.pendingRemoves.includes(imgPath)) {
-      staged.pendingRemoves.push(imgPath);
+    if (staged?.type === 'slideshow' && !staged.pendingRemoves.some(r => r === itemId)) {
+      staged.pendingRemoves.push(itemId);
       updateQueueButton();
     }
   } else {
     if (staged?.type === 'slideshow') {
-      const idx = staged.queue.findIndex(q => q.path === imgPath);
+      const idx = staged.queue.findIndex(matchFn);
       if (idx >= 0) {
         staged.queue.splice(idx, 1);
         if (staged.index >= staged.queue.length) {
@@ -1663,6 +3326,650 @@ function updateTransportUI() {
     liveBanner.classList.remove('visible');
     liveControls.classList.remove('visible');
   }
+  
+  updateScriptureTransportUI();
+}
+
+function updateScriptureTransportUI() {
+  const previewTransport = document.getElementById('previewScriptureTransport');
+  const liveTransport = document.getElementById('liveScriptureTransport');
+  
+  const showPreview = staged?.type === 'scripture';
+  const showLive = live?.type === 'scripture';
+  
+  previewTransport.classList.toggle('visible', showPreview);
+  liveTransport.classList.toggle('visible', showLive);
+}
+
+function setupScriptureTransportControls() {
+  const previewPrevBtn = document.getElementById('previewScripturePrevBtn');
+  const previewNextBtn = document.getElementById('previewScriptureNextBtn');
+  const livePrevBtn = document.getElementById('liveScripturePrevBtn');
+  const liveNextBtn = document.getElementById('liveScriptureNextBtn');
+  
+  previewPrevBtn.addEventListener('click', () => navigateVerse(-1));
+  previewNextBtn.addEventListener('click', () => navigateVerse(1));
+  
+  livePrevBtn.addEventListener('click', () => navigateLiveVerse(-1));
+  liveNextBtn.addEventListener('click', () => navigateLiveVerse(1));
+}
+
+let currentQsPreset = 'announcement';
+let currentQsBgType = 'color';
+let editingQuickSlideId = null;
+let customSlideElements = [];
+let defaultQuickSlideBackgrounds = [];
+
+function setupQuickSlidesControls() {
+  const presetBtns = document.querySelectorAll('.qs-preset-btn');
+  const titleRow = document.getElementById('qsTitleRow');
+  const bodyRow = document.getElementById('qsBodyRow');
+  const elementsRow = document.getElementById('qsElementsRow');
+  const titleInput = document.getElementById('qsTitle');
+  const bodyInput = document.getElementById('qsBody');
+  const addTitleBtn = document.getElementById('qsAddTitleBtn');
+  const addBodyBtn = document.getElementById('qsAddBodyBtn');
+  const elementsList = document.getElementById('qsElementsList');
+  const elementsHint = document.getElementById('qsElementsHint');
+  const fontFamily = document.getElementById('qsFontFamily');
+  const titleFontSize = document.getElementById('qsTitleFontSize');
+  const fontSize = document.getElementById('qsFontSize');
+  const fontColor = document.getElementById('qsFontColor');
+  const bgBtns = document.querySelectorAll('.qs-bg-btn');
+  const bgColorGroup = document.getElementById('qsBgColorGroup');
+  const bgImageGroup = document.getElementById('qsBgImageGroup');
+  const bgColor = document.getElementById('qsBgColor');
+  const bgImageSelect = document.getElementById('qsBgImageSelect');
+  const saveBtn = document.getElementById('qsSaveBtn');
+  const backgroundDim = document.getElementById('qsBackgroundDim');
+  const dimValue = document.getElementById('qsDimValue');
+
+  loadQuickSlideBackgrounds();
+
+  presetBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      presetBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentQsPreset = btn.dataset.preset;
+      
+      const isCustom = currentQsPreset === 'custom';
+      const showTitle = currentQsPreset === 'announcement' || currentQsPreset === 'prayer';
+      
+      titleRow.classList.toggle('hidden', isCustom || !showTitle);
+      bodyRow.style.display = isCustom ? 'none' : '';
+      elementsRow.style.display = isCustom ? '' : 'none';
+      
+      if (isCustom) {
+        customSlideElements = [];
+        renderCustomElementsList();
+      }
+      
+      applyPresetLayoutDefaults(currentQsPreset);
+      updateQsPreview();
+    });
+  });
+
+  addTitleBtn.addEventListener('click', () => {
+    const hasTitle = customSlideElements.some(el => el.type === 'title');
+    if (hasTitle) return;
+    customSlideElements.unshift(createSlideElement({ type: 'title', text: '' }));
+    renderCustomElementsList();
+    updateQsPreview();
+  });
+
+  addBodyBtn.addEventListener('click', () => {
+    const bodyCount = customSlideElements.filter(el => el.type === 'body').length;
+    if (bodyCount >= 4) return;
+    customSlideElements.push(createSlideElement({ type: 'body', text: '' }));
+    renderCustomElementsList();
+    updateQsPreview();
+  });
+
+  backgroundDim.addEventListener('input', () => {
+    const pct = (backgroundDim.value / backgroundDim.max) * 100;
+    backgroundDim.style.setProperty('--fill-percent', pct + '%');
+    dimValue.textContent = backgroundDim.value + '%';
+    updateQsPreview();
+  });
+
+  bgBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      bgBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      currentQsBgType = btn.dataset.bgType;
+      bgColorGroup.style.display = currentQsBgType === 'color' ? '' : 'none';
+      bgImageGroup.style.display = currentQsBgType === 'image' ? '' : 'none';
+      updateQsPreview();
+    });
+  });
+
+  bgImageSelect.addEventListener('change', updateQsPreview);
+
+  titleInput.addEventListener('input', updateQsPreview);
+  bodyInput.addEventListener('input', updateQsPreview);
+  fontFamily.addEventListener('change', updateQsPreview);
+  titleFontSize.addEventListener('change', updateQsPreview);
+  fontSize.addEventListener('change', updateQsPreview);
+  fontColor.addEventListener('input', updateQsPreview);
+  bgColor.addEventListener('input', updateQsPreview);
+
+  saveBtn.addEventListener('click', saveQuickSlide);
+
+  const initDimSlider = document.getElementById('qsBackgroundDim');
+  initDimSlider.style.setProperty('--fill-percent', (initDimSlider.value / initDimSlider.max) * 100 + '%');
+
+  updateQsPreview();
+}
+
+function applyPresetLayoutDefaults(preset) {
+  const defaults = PRESET_LAYOUT_DEFAULTS[preset] || PRESET_LAYOUT_DEFAULTS.announcement;
+  const dimSlider = document.getElementById('qsBackgroundDim');
+  dimSlider.value = defaults.backgroundDim;
+  dimSlider.style.setProperty('--fill-percent', (defaults.backgroundDim / dimSlider.max) * 100 + '%');
+  document.getElementById('qsDimValue').textContent = defaults.backgroundDim + '%';
+}
+
+async function loadQuickSlideBackgrounds() {
+  defaultQuickSlideBackgrounds = await ipcRenderer.invoke(IPC.GET_DEFAULT_QUICKSLIDE_BACKGROUNDS);
+  const bgSelect = document.getElementById('qsBgImageSelect');
+  bgSelect.innerHTML = '<option value="">-- Select --</option>';
+  defaultQuickSlideBackgrounds.forEach(bg => {
+    const opt = document.createElement('option');
+    opt.value = bg.path;
+    opt.textContent = bg.name;
+    bgSelect.appendChild(opt);
+  });
+}
+
+function updateQsPreview() {
+  const previewArea = document.getElementById('qsPreviewArea');
+  const previewTitle = document.getElementById('qsPreviewTitle');
+  const previewBody = document.getElementById('qsPreviewBody');
+  const previewCustom = document.getElementById('qsPreviewCustom');
+  const titleInput = document.getElementById('qsTitle');
+  const bodyInput = document.getElementById('qsBody');
+  const fontFamily = document.getElementById('qsFontFamily').value;
+  const titleFontSize = parseInt(document.getElementById('qsTitleFontSize').value);
+  const fontSize = parseInt(document.getElementById('qsFontSize').value);
+  const fontColor = document.getElementById('qsFontColor').value;
+  const bgColor = document.getElementById('qsBgColor').value;
+  const bgImageSelect = document.getElementById('qsBgImageSelect');
+  const bgImagePath = bgImageSelect.value;
+
+  const defaults = PRESET_LAYOUT_DEFAULTS[currentQsPreset] || PRESET_LAYOUT_DEFAULTS.announcement;
+  const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value) || defaults.backgroundDim;
+
+  const scaledFontSize = Math.round(fontSize * 0.35);
+  const scaledTitleSize = Math.round(titleFontSize * 0.35);
+
+  if (currentQsBgType === 'image' && bgImagePath) {
+    previewArea.style.backgroundImage = `url('file:///${bgImagePath.replace(/\\/g, '/')}')`;
+    previewArea.style.backgroundSize = 'cover';
+    previewArea.style.backgroundPosition = 'center';
+    previewArea.style.backgroundColor = 'transparent';
+  } else {
+    previewArea.style.backgroundImage = 'none';
+    previewArea.style.backgroundColor = currentQsBgType === 'color' ? bgColor : '#000';
+  }
+
+  previewArea.style.setProperty('--dim-opacity', backgroundDim / 100);
+
+  if (currentQsPreset === 'custom') {
+    previewTitle.style.display = 'none';
+    previewBody.style.display = 'none';
+    previewCustom.classList.add('active');
+    previewArea.style.justifyContent = '';
+    previewArea.style.alignItems = '';
+    previewArea.style.textAlign = '';
+    
+    previewCustom.innerHTML = '';
+    customSlideElements.forEach(el => {
+      const div = document.createElement('div');
+      div.className = `qs-preview-custom-el v-${el.verticalAlign} h-${el.horizontalAlign} w-${el.textWidth}`;
+      if (el.type === 'title') div.classList.add('el-title');
+      div.style.fontFamily = fontFamily;
+      div.style.fontSize = (el.type === 'title' ? scaledTitleSize : scaledFontSize) + 'px';
+      div.style.color = fontColor;
+      div.innerHTML = el.type === 'title' ? escapeHtml(el.text) : parseBodyForLists(el.text);
+      previewCustom.appendChild(div);
+    });
+  } else {
+    previewTitle.style.display = '';
+    previewBody.style.display = '';
+    previewCustom.classList.remove('active');
+    previewCustom.innerHTML = '';
+    
+    const verticalAlign = defaults.verticalAlign;
+    const horizontalAlign = defaults.horizontalAlign;
+    const textWidth = defaults.textWidth;
+    
+    const vAlignMap = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
+    const hAlignMap = { left: 'flex-start', center: 'center', right: 'flex-end' };
+    const textAlignMap = { left: 'left', center: 'center', right: 'right' };
+    const widthMap = { wide: '90%', medium: '70%', narrow: '50%' };
+
+    previewArea.style.justifyContent = vAlignMap[verticalAlign] || 'center';
+    previewArea.style.alignItems = hAlignMap[horizontalAlign] || 'center';
+    previewArea.style.textAlign = textAlignMap[horizontalAlign] || 'center';
+
+    const maxWidth = widthMap[textWidth] || '90%';
+    const showTitle = currentQsPreset === 'announcement' || currentQsPreset === 'prayer';
+
+    previewTitle.style.display = showTitle && titleInput.value ? '' : 'none';
+    previewTitle.style.fontFamily = fontFamily;
+    previewTitle.style.fontSize = scaledTitleSize + 'px';
+    previewTitle.style.color = fontColor;
+    previewTitle.style.maxWidth = maxWidth;
+    previewTitle.textContent = titleInput.value;
+
+    previewBody.style.fontFamily = fontFamily;
+    previewBody.style.fontSize = scaledFontSize + 'px';
+    previewBody.style.color = fontColor;
+    previewBody.style.maxWidth = maxWidth;
+    previewBody.innerHTML = parseBodyForLists(bodyInput.value);
+  }
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+async function saveQuickSlide() {
+  const displayName = document.getElementById('qsDisplayName').value.trim();
+  const titleInput = document.getElementById('qsTitle');
+  const bodyInput = document.getElementById('qsBody');
+  const fontFamily = document.getElementById('qsFontFamily').value;
+  const titleFontSize = parseInt(document.getElementById('qsTitleFontSize').value);
+  const fontSize = parseInt(document.getElementById('qsFontSize').value);
+  const fontColor = document.getElementById('qsFontColor').value;
+  const bgColor = document.getElementById('qsBgColor').value;
+  const bgImageSelect = document.getElementById('qsBgImageSelect');
+  const bgImagePath = bgImageSelect.value;
+  const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value);
+
+  if (currentQsPreset !== 'custom' && !bodyInput.value.trim()) {
+    alert('Please enter content for the slide.');
+    return;
+  }
+
+  const defaults = PRESET_LAYOUT_DEFAULTS[currentQsPreset] || PRESET_LAYOUT_DEFAULTS.announcement;
+
+  const slide = createQuickSlide({
+    id: editingQuickSlideId || null,
+    preset: currentQsPreset,
+    displayName,
+    title: currentQsPreset !== 'custom' ? titleInput.value.trim() : '',
+    body: currentQsPreset !== 'custom' ? bodyInput.value.trim() : '',
+    elements: currentQsPreset === 'custom' ? customSlideElements : null,
+    background: currentQsBgType === 'color' ? bgColor : '#000000',
+    backgroundImage: currentQsBgType === 'image' && bgImagePath ? bgImagePath : null,
+    fontFamily,
+    titleFontSize,
+    fontSize,
+    fontColor,
+    verticalAlign: defaults.verticalAlign,
+    horizontalAlign: defaults.horizontalAlign,
+    textWidth: defaults.textWidth,
+    backgroundDim
+  });
+
+  const result = await ipcRenderer.invoke(IPC.SAVE_QUICK_SLIDE, slide);
+  if (result.success) {
+    const wasEditing = !!editingQuickSlideId;
+    quickSlides = result.slides;
+    clearQuickSlideForm();
+    renderImageGrid();
+    alert(wasEditing ? 'Slide updated!' : 'Slide saved!');
+  }
+}
+
+function renderCustomElementsList() {
+  const elementsList = document.getElementById('qsElementsList');
+  const elementsHint = document.getElementById('qsElementsHint');
+  const addTitleBtn = document.getElementById('qsAddTitleBtn');
+  const addBodyBtn = document.getElementById('qsAddBodyBtn');
+  
+  elementsList.innerHTML = '';
+  
+  const hasTitle = customSlideElements.some(el => el.type === 'title');
+  const bodyCount = customSlideElements.filter(el => el.type === 'body').length;
+  addTitleBtn.disabled = hasTitle;
+  addBodyBtn.disabled = bodyCount >= 4;
+  elementsHint.style.display = customSlideElements.length === 0 ? '' : 'none';
+  
+  customSlideElements.forEach((el, index) => {
+    const item = document.createElement('div');
+    item.className = 'qs-element-item';
+    
+    const topRow = document.createElement('div');
+    topRow.className = 'qs-element-top-row';
+    
+    const typeLabel = document.createElement('span');
+    typeLabel.className = 'qs-element-type';
+    typeLabel.textContent = el.type;
+    
+    const textInput = document.createElement('input');
+    textInput.type = 'text';
+    textInput.className = 'qs-element-text';
+    textInput.placeholder = el.type === 'title' ? 'Enter title...' : 'Enter body text...';
+    textInput.value = el.text;
+    textInput.addEventListener('input', () => {
+      customSlideElements[index].text = textInput.value;
+      updateQsPreview();
+    });
+    
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'qs-element-remove';
+    removeBtn.innerHTML = '×';
+    removeBtn.addEventListener('click', () => {
+      customSlideElements.splice(index, 1);
+      renderCustomElementsList();
+      updateQsPreview();
+    });
+    
+    topRow.appendChild(typeLabel);
+    topRow.appendChild(textInput);
+    topRow.appendChild(removeBtn);
+    
+    const posRow = document.createElement('div');
+    posRow.className = 'qs-element-pos-row';
+    
+    const vAlignSelect = createPositionSelect('V', ['top', 'center', 'bottom'], el.verticalAlign, (val) => {
+      customSlideElements[index].verticalAlign = val;
+      updateQsPreview();
+    });
+    
+    const hAlignSelect = createPositionSelect('H', ['left', 'center', 'right'], el.horizontalAlign, (val) => {
+      customSlideElements[index].horizontalAlign = val;
+      updateQsPreview();
+    });
+    
+    const widthSelect = createPositionSelect('W', ['wide', 'medium', 'narrow'], el.textWidth, (val) => {
+      customSlideElements[index].textWidth = val;
+      updateQsPreview();
+    });
+    
+    posRow.appendChild(vAlignSelect);
+    posRow.appendChild(hAlignSelect);
+    posRow.appendChild(widthSelect);
+    
+    item.appendChild(topRow);
+    item.appendChild(posRow);
+    elementsList.appendChild(item);
+  });
+}
+
+function createPositionSelect(label, options, currentValue, onChange) {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'qs-element-pos-item';
+  
+  const labelEl = document.createElement('span');
+  labelEl.className = 'qs-element-pos-label';
+  labelEl.textContent = label;
+  
+  const select = document.createElement('select');
+  select.className = 'qs-element-pos-select';
+  
+  options.forEach(opt => {
+    const option = document.createElement('option');
+    option.value = opt;
+    option.textContent = opt.charAt(0).toUpperCase() + opt.slice(1);
+    if (opt === currentValue) option.selected = true;
+    select.appendChild(option);
+  });
+  
+  select.addEventListener('change', () => onChange(select.value));
+  
+  wrapper.appendChild(labelEl);
+  wrapper.appendChild(select);
+  return wrapper;
+}
+
+function clearQuickSlideForm() {
+  document.getElementById('qsDisplayName').value = '';
+  document.getElementById('qsTitle').value = '';
+  document.getElementById('qsBody').value = '';
+  document.getElementById('qsFontFamily').value = 'Georgia';
+  document.getElementById('qsTitleFontSize').value = '60';
+  document.getElementById('qsFontSize').value = '48';
+  document.getElementById('qsFontColor').value = '#FFFFFF';
+  document.getElementById('qsBgColor').value = '#000000';
+  document.getElementById('qsBgImageSelect').value = '';
+  editingQuickSlideId = null;
+  currentQsPreset = 'announcement';
+  currentQsBgType = 'color';
+  customSlideElements = [];
+  
+  document.querySelectorAll('.qs-preset-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === 'announcement');
+  });
+  document.querySelectorAll('.qs-bg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.bgType === 'color');
+  });
+  document.getElementById('qsTitleRow').classList.remove('hidden');
+  document.getElementById('qsBodyRow').style.display = '';
+  document.getElementById('qsElementsRow').style.display = 'none';
+  document.getElementById('qsElementsList').innerHTML = '';
+  document.getElementById('qsElementsHint').style.display = '';
+  document.getElementById('qsAddTitleBtn').disabled = false;
+  document.getElementById('qsAddBodyBtn').disabled = false;
+  document.getElementById('qsBgColorGroup').style.display = '';
+  document.getElementById('qsBgImageGroup').style.display = 'none';
+  
+  const dimSlider = document.getElementById('qsBackgroundDim');
+  dimSlider.value = 0;
+  dimSlider.style.setProperty('--fill-percent', '0%');
+  document.getElementById('qsDimValue').textContent = '0%';
+  
+  document.getElementById('qsSaveBtn').textContent = 'Save Slide';
+  
+  updateQsPreview();
+}
+
+function loadQuickSlideForEdit(slide) {
+  editingQuickSlideId = slide.id;
+  currentQsPreset = slide.preset;
+  currentQsBgType = slide.backgroundImage ? 'image' : 'color';
+  customSlideElements = slide.preset === 'custom' && slide.elements ? [...slide.elements] : [];
+  
+  document.getElementById('qsDisplayName').value = slide.displayName || '';
+  document.getElementById('qsTitle').value = slide.title || '';
+  document.getElementById('qsBody').value = slide.body || '';
+  document.getElementById('qsFontFamily').value = slide.fontFamily || 'Georgia';
+  document.getElementById('qsTitleFontSize').value = slide.titleFontSize || 60;
+  document.getElementById('qsFontSize').value = slide.fontSize || 48;
+  document.getElementById('qsFontColor').value = slide.fontColor || '#FFFFFF';
+  document.getElementById('qsBgColor').value = slide.background || '#000000';
+  document.getElementById('qsBgImageSelect').value = slide.backgroundImage || '';
+  
+  document.querySelectorAll('.qs-preset-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.preset === slide.preset);
+  });
+  document.querySelectorAll('.qs-bg-btn').forEach(b => {
+    b.classList.toggle('active', b.dataset.bgType === currentQsBgType);
+  });
+  
+  const isCustom = slide.preset === 'custom';
+  const showTitle = slide.preset === 'announcement' || slide.preset === 'prayer';
+  document.getElementById('qsTitleRow').classList.toggle('hidden', isCustom || !showTitle);
+  document.getElementById('qsBodyRow').style.display = isCustom ? 'none' : '';
+  document.getElementById('qsElementsRow').style.display = isCustom ? '' : 'none';
+  document.getElementById('qsBgColorGroup').style.display = currentQsBgType === 'color' ? '' : 'none';
+  document.getElementById('qsBgImageGroup').style.display = currentQsBgType === 'image' ? '' : 'none';
+  
+  if (isCustom) {
+    renderCustomElementsList();
+  }
+  
+  const dimSlider = document.getElementById('qsBackgroundDim');
+  const dimVal = slide.backgroundDim !== undefined ? slide.backgroundDim : 0;
+  dimSlider.value = dimVal;
+  dimSlider.style.setProperty('--fill-percent', (dimVal / dimSlider.max) * 100 + '%');
+  document.getElementById('qsDimValue').textContent = dimVal + '%';
+  
+  updateQsPreview();
+  
+  document.getElementById('qsSaveBtn').textContent = 'Update Slide';
+}
+
+async function navigateLiveVerse(direction) {
+  if (!live || live.type !== 'scripture') return;
+  
+  const bibleId = live.bibleId;
+  const bibleId2 = live.bibleId2;
+  
+  let targetBook = live.bookId;
+  let targetChapter = live.chapter;
+  let targetVerse = live.verse + direction;
+  
+  if (targetVerse < 1) {
+    const prevChapterKey = getCacheKey(bibleId, targetBook, targetChapter - 1);
+    const prevChapterCached = chapterCache.get(prevChapterKey);
+    
+    if (prevChapterCached && targetChapter > 1) {
+      targetChapter = targetChapter - 1;
+      targetVerse = prevChapterCached.verseCount || Object.keys(prevChapterCached.verses).length;
+    } else {
+      const info = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+      if (info.error) return;
+      
+      const bookOrder = info.bookOrder;
+      const bookIndex = bookOrder.indexOf(targetBook);
+      
+      if (targetChapter > 1) {
+        targetChapter = targetChapter - 1;
+        const prevChapterInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+        if (prevChapterInfo.error || !prevChapterInfo.lastVerse) return;
+        targetVerse = prevChapterInfo.lastVerse;
+      } else if (bookIndex > 0) {
+        targetBook = bookOrder[bookIndex - 1];
+        const prevBookInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, 1);
+        if (prevBookInfo.error) return;
+        targetChapter = prevBookInfo.chapterCount;
+        const lastChapterInfo = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+        if (lastChapterInfo.error || !lastChapterInfo.lastVerse) return;
+        targetVerse = lastChapterInfo.lastVerse;
+      } else {
+        return;
+      }
+    }
+  }
+  
+  let result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+  
+  if (!result) {
+    await fetchAndCacheChapter(bibleId, targetBook, targetChapter);
+    if (bibleId2) {
+      await fetchAndCacheChapter(bibleId2, targetBook, targetChapter);
+    }
+    result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+  }
+  
+  if (!result && direction > 0) {
+    const cacheKey = getCacheKey(bibleId, targetBook, targetChapter);
+    const cachedChapter = chapterCache.get(cacheKey);
+    if (cachedChapter) {
+      const verseCount = cachedChapter.verseCount || Object.keys(cachedChapter.verses).length;
+      if (targetVerse > verseCount) {
+        result = { error: 'Verse not found' };
+      }
+    }
+  }
+  
+  if (!result) {
+    result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { 
+      reference: `${targetBook}.${targetChapter}.${targetVerse}`,
+      bibleId, 
+      bibleId2 
+    });
+  }
+  
+  if (result.error && result.error.includes('not found') && direction > 0) {
+    const nextChapterKey = getCacheKey(bibleId, targetBook, targetChapter + 1);
+    const nextChapterCached = chapterCache.get(nextChapterKey);
+    
+    if (nextChapterCached && nextChapterCached.verses[1]) {
+      targetChapter = targetChapter + 1;
+      targetVerse = 1;
+      result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+    } else {
+      const info = await ipcRenderer.invoke(IPC.GET_CHAPTER_INFO, bibleId, targetBook, targetChapter);
+      if (!info.error) {
+        const bookOrder = info.bookOrder;
+        const bookIndex = bookOrder.indexOf(targetBook);
+        
+        if (targetChapter < info.chapterCount) {
+          targetChapter = targetChapter + 1;
+          targetVerse = 1;
+        } else if (bookIndex < bookOrder.length - 1) {
+          targetBook = bookOrder[bookIndex + 1];
+          targetChapter = 1;
+          targetVerse = 1;
+        } else {
+          return;
+        }
+        
+        result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+        
+        if (!result) {
+          await fetchAndCacheChapter(bibleId, targetBook, targetChapter);
+          if (bibleId2) {
+            await fetchAndCacheChapter(bibleId2, targetBook, targetChapter);
+          }
+          result = await getVerseWithCache(bibleId, targetBook, targetChapter, targetVerse, bibleId2);
+        }
+        
+        if (!result) {
+          result = await ipcRenderer.invoke(IPC.FETCH_SCRIPTURE, { 
+            reference: `${targetBook}.${targetChapter}.${targetVerse}`,
+            bibleId, 
+            bibleId2 
+          });
+        }
+      }
+    }
+  }
+  
+  if (result.error) return;
+  
+  live = {
+    ...createScripture(
+      result.reference, result.text, result.version, result.bibleId,
+      result.bookId, result.chapter, result.verse,
+      result.compareText, result.compareVersion, result.bibleId2
+    ),
+    liveBackground: settings.scriptureBackground || '#000000',
+    liveBackgroundImage: settings.scriptureBackgroundImage || null,
+    liveFontFamily: settings.scriptureFontFamily || 'Georgia',
+    liveFontSize: settings.scriptureFontSize || 48,
+    liveFontColor: settings.scriptureFontColor || '#FFFFFF'
+  };
+  
+  ipcRenderer.send(IPC.SHOW_SCRIPTURE, {
+    reference: live.reference,
+    text: live.text,
+    version: live.version,
+    compareText: live.compareText,
+    compareVersion: live.compareVersion,
+    background: settings.scriptureBackground || '#000000',
+    backgroundImage: settings.scriptureBackgroundImage || null,
+    fontFamily: settings.scriptureFontFamily || 'Georgia',
+    fontSize: settings.scriptureFontSize || 48,
+    fontColor: settings.scriptureFontColor || '#FFFFFF',
+    direction: direction
+  });
+  
+  if (isSynced && staged?.type === 'scripture') {
+    staged = { ...live };
+    updatePreviewDisplay();
+  }
+  
+  prefetchNearbyChapter(bibleId, result.bookId, result.chapter, result.verse, bibleId2);
+  
+  updateLiveDisplay();
+  updateGoLiveButton();
+  updateTransportUI();
 }
 
 function setupModal() {
@@ -1679,10 +3986,14 @@ function setupModal() {
   
   selectAllBtn.addEventListener('click', () => {
     const mediaItems = mediaLibrary.filter(f => f.type === 'image' || f.type === 'video');
+    const allItems = [...mediaItems, ...quickSlides];
     const alreadyInQueue = getAlreadyInQueuePaths();
-    modalSelectedImages = mediaItems
-      .filter(item => !alreadyInQueue.includes(item.path))
-      .map(item => item.path);
+    modalSelectedImages = allItems
+      .filter(item => {
+        const itemId = item.type === 'quick-slide' ? item.id : item.path;
+        return !alreadyInQueue.includes(itemId);
+      })
+      .map(item => item.type === 'quick-slide' ? item.id : item.path);
     renderModalGrid();
     updateModalCount();
   });
@@ -1694,41 +4005,54 @@ function setupModal() {
   });
   
   confirmBtn.addEventListener('click', () => {
-    modalSelectedImages.forEach(imgPath => {
-      const libItem = mediaLibrary.find(f => f.path === imgPath);
+    modalSelectedImages.forEach(itemId => {
+      let newItem = null;
+      
+      const libItem = mediaLibrary.find(f => f.path === itemId);
+      const qsItem = quickSlides.find(s => s.id === itemId);
+      
       if (libItem) {
-        const newItem = {
+        newItem = {
           path: libItem.path,
           displayName: libItem.displayName || libItem.name,
           type: libItem.type
         };
-        
-        if (live?.type === 'slideshow') {
-          if (staged?.type === 'slideshow') {
-            if (!staged.queue.some(q => q.path === imgPath) &&
-                !staged.pendingAdds.some(q => q.path === imgPath)) {
-              staged.pendingAdds.push(newItem);
-            }
+      } else if (qsItem) {
+        newItem = { ...qsItem };
+      }
+      
+      if (!newItem) return;
+      
+      const itemKey = newItem.type === 'quick-slide' ? newItem.id : newItem.path;
+      
+      if (live?.type === 'slideshow') {
+        if (staged?.type === 'slideshow') {
+          const inQueue = staged.queue.some(q => (q.type === 'quick-slide' ? q.id : q.path) === itemKey);
+          const inPending = staged.pendingAdds.some(q => (q.type === 'quick-slide' ? q.id : q.path) === itemKey);
+          if (!inQueue && !inPending) {
+            staged.pendingAdds.push(newItem);
+          }
+        }
+      } else {
+        if (staged?.type === 'slideshow') {
+          const inQueue = staged.queue.some(q => (q.type === 'quick-slide' ? q.id : q.path) === itemKey);
+          if (!inQueue) {
+            staged.queue.push(newItem);
           }
         } else {
-          if (staged?.type === 'slideshow') {
-            if (!staged.queue.some(q => q.path === imgPath)) {
-              staged.queue.push(newItem);
-            }
-          } else {
-            const queue = getStagedSlideshowQueue();
-            if (!queue.some(q => q.path === imgPath)) {
-              queue.push(newItem);
-            }
-            staged = createSlideshow(
-              currentPreset?.id || null,
-              queue,
-              0,
-              queuedSettings.interval,
-              queuedSettings.loop,
-              queuedSettings.transition
-            );
+          const queue = getStagedSlideshowQueue();
+          const inQueue = queue.some(q => (q.type === 'quick-slide' ? q.id : q.path) === itemKey);
+          if (!inQueue) {
+            queue.push(newItem);
           }
+          staged = createSlideshow(
+            currentPreset?.id || null,
+            queue,
+            0,
+            queuedSettings.interval,
+            queuedSettings.loop,
+            queuedSettings.transition
+          );
         }
       }
     });
@@ -1753,13 +4077,13 @@ function setupModal() {
 }
 
 function getAlreadyInQueuePaths() {
-  const paths = [];
+  const ids = [];
   const queue = getStagedSlideshowQueue();
-  queue.forEach(q => paths.push(q.path));
+  queue.forEach(q => ids.push(q.type === 'quick-slide' ? q.id : q.path));
   if (staged?.type === 'slideshow') {
-    staged.pendingAdds.forEach(q => paths.push(q.path));
+    staged.pendingAdds.forEach(q => ids.push(q.type === 'quick-slide' ? q.id : q.path));
   }
-  return paths;
+  return ids;
 }
 
 function openModal() {
@@ -1778,9 +4102,10 @@ function renderModalGrid() {
   const grid = document.getElementById('modalImageGrid');
   const hint = document.getElementById('modalEmptyHint');
   const mediaItems = mediaLibrary.filter(f => f.type === 'image' || f.type === 'video');
+  const allItems = [...mediaItems, ...quickSlides];
   grid.innerHTML = '';
   
-  if (mediaItems.length === 0) {
+  if (allItems.length === 0) {
     grid.innerHTML = '<p style="color:#666;text-align:center;grid-column:1/-1;">No media in library yet.</p>';
     hint.style.display = 'block';
     return;
@@ -1790,13 +4115,17 @@ function renderModalGrid() {
   
   const alreadyInQueue = getAlreadyInQueuePaths();
   
-  mediaItems.forEach(file => {
+  allItems.forEach(file => {
+    const isQuickSlide = file.type === 'quick-slide';
+    const itemId = isQuickSlide ? file.id : file.path;
+    
     const thumb = document.createElement('div');
     thumb.className = 'modal-thumb';
-    thumb.dataset.path = file.path;
+    thumb.dataset.path = itemId;
+    thumb.dataset.type = file.type;
     
-    const inQueue = alreadyInQueue.includes(file.path);
-    const isSelected = modalSelectedImages.includes(file.path);
+    const inQueue = alreadyInQueue.includes(itemId);
+    const isSelected = modalSelectedImages.includes(itemId);
     
     if (inQueue) {
       thumb.classList.add('in-queue');
@@ -1807,41 +4136,64 @@ function renderModalGrid() {
       thumb.classList.add('selected');
     }
     
-    const img = document.createElement('img');
-    if (file.type === 'video') {
-      ipcRenderer.invoke(IPC.GET_THUMBNAIL, file.path).then(thumbnailPath => {
-        if (thumbnailPath) {
-          img.src = 'file://' + thumbnailPath;
-        } else {
-          img.style.background = '#333';
-        }
-      });
-      const videoBadge = document.createElement('div');
-      videoBadge.className = 'video-badge';
-      videoBadge.innerHTML = '▶';
-      videoBadge.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:24px;height:24px;background:rgba(0,0,0,0.7);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;';
+    if (isQuickSlide) {
       thumb.style.position = 'relative';
-      thumb.appendChild(videoBadge);
+      const preview = document.createElement('div');
+      preview.className = 'quick-slide-thumbnail';
+      if (file.backgroundImage) {
+        preview.style.backgroundImage = `url('file:///${file.backgroundImage.replace(/\\/g, '/')}')`;
+        preview.style.backgroundSize = 'cover';
+      } else {
+        preview.style.backgroundColor = file.background || '#000';
+      }
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'qs-thumb-body';
+      bodyEl.style.color = file.fontColor || '#fff';
+      bodyEl.textContent = file.body?.substring(0, 30) || '';
+      preview.appendChild(bodyEl);
+      thumb.appendChild(preview);
+      
+      const badge = document.createElement('div');
+      badge.className = 'quick-slide-badge';
+      badge.textContent = file.preset.charAt(0).toUpperCase();
+      badge.style.cssText = 'position:absolute;top:4px;right:4px;width:18px;height:18px;background:rgba(0,0,0,0.6);color:#fff;border-radius:50%;font-size:10px;font-weight:bold;display:flex;align-items:center;justify-content:center;';
+      thumb.appendChild(badge);
     } else {
-      img.src = 'file://' + file.path;
+      const img = document.createElement('img');
+      if (file.type === 'video') {
+        ipcRenderer.invoke(IPC.GET_THUMBNAIL, file.path).then(thumbnailPath => {
+          if (thumbnailPath) {
+            img.src = 'file://' + thumbnailPath;
+          } else {
+            img.style.background = '#333';
+          }
+        });
+        const videoBadge = document.createElement('div');
+        videoBadge.className = 'video-badge';
+        videoBadge.innerHTML = '▶';
+        videoBadge.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:24px;height:24px;background:rgba(0,0,0,0.7);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:10px;color:#fff;';
+        thumb.style.position = 'relative';
+        thumb.appendChild(videoBadge);
+      } else {
+        img.src = 'file://' + file.path;
+      }
+      thumb.appendChild(img);
     }
     
     const check = document.createElement('span');
     check.className = 'check-badge';
     check.innerHTML = '✓';
-    
-    thumb.appendChild(img);
     thumb.appendChild(check);
     
     thumb.addEventListener('click', () => {
       if (inQueue) return;
       
-      const idx = modalSelectedImages.indexOf(file.path);
+      const idx = modalSelectedImages.indexOf(itemId);
       if (idx >= 0) {
         modalSelectedImages.splice(idx, 1);
         thumb.classList.remove('selected');
       } else {
-        modalSelectedImages.push(file.path);
+        modalSelectedImages.push(itemId);
         thumb.classList.add('selected');
       }
       updateModalCount();
@@ -1864,5 +4216,101 @@ ipcRenderer.on(IPC.DISPLAY_RESOLUTION_CHANGED, (event, resolution) => {
   displayResolution = resolution;
   renderImageGrid();
 });
+
+ipcRenderer.on(IPC.PRESENTATION_VISIBILITY, (event, visible) => {
+  presentationVisible = visible;
+  updateBlackoutOverlay();
+});
+
+function setupBlackoutMode() {
+  const livePaneLabel = document.getElementById('livePaneLabel');
+  const blackoutOverlay = document.getElementById('blackoutOverlay');
+  const restoreBtn = document.getElementById('blackoutRestoreBtn');
+  
+  livePaneLabel.addEventListener('dblclick', () => {
+    if (presentationVisible) {
+      ipcRenderer.send(IPC.HIDE_PRESENTATION);
+    } else {
+      ipcRenderer.send(IPC.SHOW_PRESENTATION);
+    }
+  });
+  
+  restoreBtn.addEventListener('click', () => {
+    ipcRenderer.send(IPC.SHOW_PRESENTATION);
+  });
+}
+
+function updateBlackoutOverlay() {
+  const blackoutOverlay = document.getElementById('blackoutOverlay');
+  blackoutOverlay.classList.toggle('active', !presentationVisible);
+}
+
+function setupContextMenu() {
+  const menu = document.getElementById('brokenItemMenu');
+  const relocateBtn = document.getElementById('relocateItem');
+  const removeBtn = document.getElementById('removeItem');
+  
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target)) {
+      hideContextMenu();
+    }
+  });
+  
+  relocateBtn.addEventListener('click', async () => {
+    if (!contextMenuTarget) return;
+    
+    const filters = contextMenuTarget.type === 'video' 
+      ? [{ name: 'Videos', extensions: ['mp4', 'webm', 'mov', 'avi', 'mkv'] }]
+      : [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }];
+    
+    const files = await ipcRenderer.invoke(IPC.PICK_FILE, filters);
+    if (files && files.length > 0) {
+      const result = await ipcRenderer.invoke(IPC.RELOCATE_LIBRARY_ITEM, contextMenuTarget.path, files[0]);
+      if (result.success) {
+        brokenPaths.delete(contextMenuTarget.path);
+        mediaLibrary = result.mediaLibrary;
+        renderImageGrid();
+        slideshowPresets = await ipcRenderer.invoke(IPC.GET_SLIDESHOW_PRESETS);
+        renderSlideshowQueue();
+        updatePresetDropdown();
+      }
+    }
+    hideContextMenu();
+  });
+  
+  removeBtn.addEventListener('click', async () => {
+    if (!contextMenuTarget) return;
+    
+    mediaLibrary = await ipcRenderer.invoke(IPC.REMOVE_FROM_LIBRARY, contextMenuTarget.path);
+    brokenPaths.delete(contextMenuTarget.path);
+    
+    if (selectedImage === contextMenuTarget.path) {
+      selectedImage = null;
+      staged = null;
+      updatePreviewDisplay();
+    }
+    
+    renderImageGrid();
+    hideContextMenu();
+  });
+}
+
+function showBrokenContextMenu(e, file) {
+  e.preventDefault();
+  e.stopPropagation();
+  
+  contextMenuTarget = file;
+  const menu = document.getElementById('brokenItemMenu');
+  
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
+  menu.classList.add('visible');
+}
+
+function hideContextMenu() {
+  const menu = document.getElementById('brokenItemMenu');
+  menu.classList.remove('visible');
+  contextMenuTarget = null;
+}
 
 document.addEventListener('DOMContentLoaded', init);

@@ -19,6 +19,9 @@
           <button class="nav-btn" data-mode="scripture">Scripture</button>
         </li>
         <li>
+          <button class="nav-btn" data-mode="quick-slides">Quick Slides</button>
+        </li>
+        <li>
           <button class="nav-btn" data-mode="settings">Settings</button>
         </li>
       </ul>
@@ -38,6 +41,8 @@
               <button class="filter-btn active" data-filter="all">All</button>
               <button class="filter-btn" data-filter="image">Images</button>
               <button class="filter-btn" data-filter="video">Videos</button>
+              <button class="filter-btn" data-filter="audio">Audio</button>
+              <button class="filter-btn" data-filter="quick-slide">Slides</button>
             </div>
           </div>
           <div class="thumbnail-grid" id="imageGrid">
@@ -100,7 +105,199 @@
         
         <section class="mode-panel" data-panel="scripture">
           <h2>Scripture</h2>
-          <p class="placeholder-text">Scripture controls coming in Phase 6</p>
+          
+          <div class="scripture-lists">
+            <div class="scripture-list-section">
+              <div class="section-header">
+                <span>📌 Pinned</span>
+              </div>
+              <div class="scripture-list" id="pinnedScripturesList">
+                <div class="empty-list">No pinned scriptures</div>
+              </div>
+            </div>
+            
+            <div class="scripture-list-section">
+              <div class="section-header">
+                <span>🕐 Recent</span>
+                <button class="btn btn-small btn-text" id="clearRecentsBtn" title="Clear all recent lookups">Clear All</button>
+              </div>
+              <div class="scripture-list" id="recentScripturesList">
+                <div class="empty-list">No recent lookups</div>
+              </div>
+            </div>
+          </div>
+          
+          <div class="scripture-lookup">
+            <div class="scripture-version-row">
+              <label>Version:</label>
+              <select id="bibleVersionSelect" class="select-input select-small">
+                <option value="de4e12af7f28f599-02">KJV</option>
+                <option value="06125adad2d5898a-01">ASV</option>
+                <option value="9879dbb7cfe39e4d-04">WEB</option>
+                <option value="592420522e16049f-01">RVR09 (Spanish)</option>
+              </select>
+              <label class="compare-toggle">
+                <input type="checkbox" id="compareModeCheckbox">
+                <span>Compare Mode</span>
+              </label>
+            </div>
+            
+            <div class="scripture-version-row compare-row" id="compareVersionRow">
+              <label>Version 2:</label>
+              <select id="bibleVersion2Select" class="select-input select-small">
+                <option value="de4e12af7f28f599-02">KJV</option>
+                <option value="06125adad2d5898a-01">ASV</option>
+                <option value="9879dbb7cfe39e4d-04">WEB</option>
+                <option value="592420522e16049f-01">RVR09 (Spanish)</option>
+              </select>
+            </div>
+            
+            <div class="scripture-input-section">
+              <div class="section-label">Text Input:</div>
+              <div class="scripture-text-input-row">
+                <input type="text" id="scriptureTextInput" class="scripture-text-input" placeholder="e.g., John 3:16">
+                <button class="btn" id="lookupTextBtn">Lookup</button>
+              </div>
+              <div class="scripture-parse-preview" id="parsePreview"></div>
+            </div>
+            
+            <div class="scripture-input-section">
+              <div class="section-label">- OR - Manual Select:</div>
+              <div class="scripture-manual-row">
+                <select id="bookSelect" class="select-input select-small">
+                  <option value="">Book...</option>
+                </select>
+                <select id="chapterSelect" class="select-input select-small" disabled>
+                  <option value="">Ch...</option>
+                </select>
+                <select id="verseSelect" class="select-input select-small" disabled>
+                  <option value="">Vs...</option>
+                </select>
+                <button class="btn" id="lookupManualBtn" disabled>Lookup</button>
+              </div>
+            </div>
+            
+            <div class="scripture-pin-row">
+              <button class="btn btn-small" id="pinCurrentBtn" disabled>📌 Pin Current</button>
+            </div>
+          </div>
+        </section>
+        
+        <section class="mode-panel" data-panel="quick-slides">
+          <h2>Quick Slides</h2>
+          <div class="quick-slides-container">
+            <div class="qs-form">
+              <div class="qs-row">
+                <label>Type</label>
+                <div class="qs-preset-buttons">
+                  <button class="qs-preset-btn active" data-preset="announcement">Announcement</button>
+                  <button class="qs-preset-btn" data-preset="welcome">Welcome</button>
+                  <button class="qs-preset-btn" data-preset="prayer">Prayer Request</button>
+                  <button class="qs-preset-btn" data-preset="lyrics">Song Lyrics</button>
+                  <button class="qs-preset-btn" data-preset="custom">Custom</button>
+                </div>
+              </div>
+              <div class="qs-row" id="qsNameRow">
+                <label for="qsDisplayName">Name</label>
+                <input type="text" id="qsDisplayName" class="text-input" placeholder="Optional display name...">
+              </div>
+              <div class="qs-row" id="qsTitleRow">
+                <label for="qsTitle">Title</label>
+                <input type="text" id="qsTitle" class="text-input" placeholder="Enter title...">
+              </div>
+              <div class="qs-row" id="qsBodyRow">
+                <label for="qsBody">Content</label>
+                <textarea id="qsBody" class="text-input qs-body-input" placeholder="Enter content..." rows="4"></textarea>
+              </div>
+              <div class="qs-row qs-elements-row" id="qsElementsRow" style="display: none;">
+                <label>Elements</label>
+                <div class="qs-elements-container">
+                  <div class="qs-elements-actions">
+                    <button class="btn btn-small" id="qsAddTitleBtn">+ Title</button>
+                    <button class="btn btn-small" id="qsAddBodyBtn">+ Body</button>
+                  </div>
+                  <div class="qs-elements-list" id="qsElementsList"></div>
+                  <div class="qs-elements-hint" id="qsElementsHint">Add elements or leave empty for background-only slide</div>
+                </div>
+              </div>
+              <div class="qs-row qs-style-row">
+                <div class="qs-style-item">
+                  <label for="qsFontFamily">Font</label>
+                  <select id="qsFontFamily" class="select-input">
+                    <option value="Georgia">Georgia</option>
+                    <option value="Times New Roman">Times New Roman</option>
+                    <option value="Arial">Arial</option>
+                    <option value="Verdana">Verdana</option>
+                  </select>
+                </div>
+                <div class="qs-style-item">
+                  <label for="qsTitleFontSize">Title Size</label>
+                  <select id="qsTitleFontSize" class="select-input">
+                    <option value="36">36px</option>
+                    <option value="48">48px</option>
+                    <option value="60" selected>60px</option>
+                    <option value="72">72px</option>
+                    <option value="84">84px</option>
+                    <option value="96">96px</option>
+                    <option value="108">108px</option>
+                    <option value="120">120px</option>
+                    <option value="144">144px</option>
+                    <option value="168">168px</option>
+                    <option value="180">180px</option>
+                  </select>
+                </div>
+                <div class="qs-style-item">
+                  <label for="qsFontSize">Body Size</label>
+                  <select id="qsFontSize" class="select-input">
+                    <option value="36">36px</option>
+                    <option value="48" selected>48px</option>
+                    <option value="60">60px</option>
+                    <option value="72">72px</option>
+                    <option value="84">84px</option>
+                    <option value="96">96px</option>
+                    <option value="108">108px</option>
+                    <option value="120">120px</option>
+                  </select>
+                </div>
+                <div class="qs-style-item">
+                  <label for="qsFontColor">Color</label>
+                  <input type="color" id="qsFontColor" value="#FFFFFF">
+                </div>
+              </div>
+              <div class="qs-row qs-bg-row">
+                <label>Background</label>
+                <div class="qs-bg-controls">
+                  <div class="qs-bg-toggle">
+                    <button class="qs-bg-btn active" data-bg-type="color">Color</button>
+                    <button class="qs-bg-btn" data-bg-type="image">Image</button>
+                  </div>
+                  <div class="qs-bg-color-group" id="qsBgColorGroup">
+                    <input type="color" id="qsBgColor" value="#000000">
+                  </div>
+                  <div class="qs-bg-image-group" id="qsBgImageGroup" style="display: none;">
+                    <select id="qsBgImageSelect" class="select-input">
+                      <option value="">-- Select --</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              <div class="qs-row qs-dim-row">
+                <label for="qsBackgroundDim">Background Dim <span id="qsDimValue">0%</span></label>
+                <input type="range" id="qsBackgroundDim" min="0" max="50" value="0">
+              </div>
+              <div class="qs-row qs-preview-row">
+                <label>Preview</label>
+                <div class="qs-preview-area" id="qsPreviewArea">
+                  <div class="qs-preview-title" id="qsPreviewTitle"></div>
+                  <div class="qs-preview-body" id="qsPreviewBody"></div>
+                  <div class="qs-preview-custom" id="qsPreviewCustom"></div>
+                </div>
+              </div>
+              <div class="qs-actions">
+                <button class="btn btn-large" id="qsSaveBtn">Save Slide</button>
+              </div>
+            </div>
+          </div>
         </section>
         
         <section class="mode-panel" data-panel="settings">
@@ -121,8 +318,63 @@
           <div class="settings-group">
             <label for="standbyImagePath">Standby Image</label>
             <div class="file-input-group">
-              <input type="text" id="standbyImagePath" readonly placeholder="No image selected">
+              <input type="text" id="standbyImagePath" readonly placeholder="Using default">
               <button class="btn" id="pickStandbyImage">Browse</button>
+              <button class="btn btn-secondary" id="clearStandbyImage" title="Reset to default">Clear</button>
+            </div>
+          </div>
+          
+          <h3 class="settings-section-title">Scripture API</h3>
+          <div class="settings-group">
+            <label for="bibleApiKey">API Key</label>
+            <input type="password" id="bibleApiKey" class="text-input" placeholder="Enter your API.Bible key...">
+            <p class="settings-hint">Get a free key at <a href="https://scripture.api.bible/signup" id="apiSignupLink">scripture.api.bible/signup</a></p>
+          </div>
+          
+          <h3 class="settings-section-title">Scripture Display</h3>
+          <div class="settings-group">
+            <label for="scriptureFontFamily">Font</label>
+            <select id="scriptureFontFamily" class="select-input">
+              <option value="Georgia">Georgia (Serif)</option>
+              <option value="Times New Roman">Times New Roman (Serif)</option>
+              <option value="Arial">Arial (Sans-serif)</option>
+              <option value="Verdana">Verdana (Sans-serif)</option>
+              <option value="Roboto">Roboto (Sans-serif)</option>
+            </select>
+          </div>
+          <div class="settings-group">
+            <label for="scriptureFontSize">Font Size: <span id="fontSizeValue">48</span>px</label>
+            <input type="range" id="scriptureFontSize" class="slider-input" min="24" max="96" value="48">
+          </div>
+          <div class="settings-group">
+            <label for="scriptureFontColor">Text Color</label>
+            <div class="color-input-group">
+              <input type="color" id="scriptureFontColor" value="#FFFFFF">
+              <span class="color-preview" id="fontColorPreview">#FFFFFF</span>
+            </div>
+          </div>
+          <div class="settings-group">
+            <label>Background Type</label>
+            <div class="background-type-toggle">
+              <button class="bg-type-btn active" data-type="color">Solid Color</button>
+              <button class="bg-type-btn" data-type="image">Image</button>
+            </div>
+          </div>
+          <div class="settings-group bg-color-group">
+            <label for="scriptureBackground">Background Color</label>
+            <div class="color-input-group">
+              <input type="color" id="scriptureBackground" value="#000000">
+              <span class="color-preview" id="bgColorPreview">#000000</span>
+            </div>
+          </div>
+          <div class="settings-group bg-image-group" style="display: none;">
+            <label for="scriptureBackgroundSelect">Background Image</label>
+            <select id="scriptureBackgroundSelect" class="select-input">
+              <option value="">-- Select --</option>
+            </select>
+            <div class="custom-bg-row" id="customBgRow" style="display: none;">
+              <input type="text" id="scriptureBackgroundImagePath" readonly placeholder="Select an image...">
+              <button class="btn btn-small" id="pickScriptureBackground">Browse</button>
             </div>
           </div>
         </section>
@@ -159,6 +411,22 @@
               <button class="btn transport-btn" id="previewVideoPlayBtn" title="Play/Pause">▶️</button>
             </div>
           </div>
+          <div class="pane-transport audio-transport" id="previewAudioTransport">
+            <div class="audio-scrubber">
+              <span class="audio-time" id="previewAudioTime">0:00</span>
+              <input type="range" class="audio-slider" id="previewAudioSlider" min="0" max="100" value="0">
+              <span class="audio-duration" id="previewAudioDuration">0:00</span>
+            </div>
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="previewAudioPlayBtn" title="Play/Pause">▶️</button>
+            </div>
+          </div>
+          <div class="pane-transport scripture-transport" id="previewScriptureTransport">
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="previewScripturePrevBtn" title="Previous Verse">← Prev</button>
+              <button class="btn transport-btn" id="previewScriptureNextBtn" title="Next Verse">Next →</button>
+            </div>
+          </div>
         </div>
         
         <div class="display-controls">
@@ -166,7 +434,7 @@
         </div>
         
         <div class="display-pane live-pane">
-          <div class="display-label">Live</div>
+          <div class="display-label" id="livePaneLabel">Live</div>
           <div class="display-content" id="liveContent">
             <span class="display-placeholder">Standby</span>
           </div>
@@ -196,6 +464,33 @@
               <button class="btn transport-btn btn-danger" id="liveVideoStopBtn" title="Stop">⏹️</button>
             </div>
           </div>
+          <div class="pane-transport audio-transport" id="liveAudioTransport">
+            <div class="audio-scrubber">
+              <span class="audio-time" id="liveAudioTime">0:00</span>
+              <input type="range" class="audio-slider" id="liveAudioSlider" min="0" max="100" value="0">
+              <span class="audio-duration" id="liveAudioDuration">0:00</span>
+            </div>
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="liveAudioPlayBtn" title="Play/Pause">⏸️</button>
+              <button class="btn transport-btn" id="liveAudioRestartBtn" title="Restart">⏮️</button>
+              <button class="btn transport-btn btn-danger" id="liveAudioStopBtn" title="Stop">⏹️</button>
+            </div>
+          </div>
+          <div class="pane-transport scripture-transport" id="liveScriptureTransport">
+            <div class="transport-buttons">
+              <button class="btn transport-btn" id="liveScripturePrevBtn" title="Previous Verse">← Prev</button>
+              <button class="btn transport-btn" id="liveScriptureNextBtn" title="Next Verse">Next →</button>
+            </div>
+          </div>
+        </div>
+        
+        <div class="blackout-overlay" id="blackoutOverlay">
+          <div class="blackout-content">
+            <div class="blackout-icon">🖥️</div>
+            <div class="blackout-title">PRESENTATION HIDDEN</div>
+            <div class="blackout-subtitle">The presentation display is not visible</div>
+            <button class="blackout-restore-btn" id="blackoutRestoreBtn">SHOW PRESENTATION</button>
+          </div>
         </div>
       </div>
     </main>
@@ -221,6 +516,11 @@
         <button class="btn btn-primary" id="confirmModalBtn">Add Selected</button>
       </div>
     </div>
+  </div>
+  
+  <div class="context-menu" id="brokenItemMenu">
+    <button class="context-menu-item" id="relocateItem">Relocate File...</button>
+    <button class="context-menu-item context-menu-danger" id="removeItem">Remove from Library</button>
   </div>
 
   <script src="control.js"></script>

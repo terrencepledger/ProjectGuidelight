@@ -4,12 +4,41 @@
   "description": "Church presentation control system for Greater Pentecostal Temple",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "start": "electronmon .",
+    "build": "electron-builder --win portable"
   },
   "keywords": [],
-  "author": "",
+  "author": "Greater Pentecostal Temple",
   "license": "ISC",
   "devDependencies": {
-    "electron": "^37.0.0"
+    "electron": "^37.0.0",
+    "electron-builder": "^25.1.8",
+    "electronmon": "^2.0.4"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5"
+  },
+  "build": {
+    "appId": "com.gpt.guidelight",
+    "productName": "Guidelight",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "src/**/*",
+      "assets/**/*",
+      "!**/.env",
+      "!**/.env.example",
+      "!**/FUTURE_WORK.md"
+    ],
+    "win": {
+      "target": "portable",
+      "signAndEditExecutable": false,
+      "icon": "assets/icon.ico"
+    },
+    "portable": {
+      "artifactName": "Guidelight.${ext}"
+    }
   }
 }
