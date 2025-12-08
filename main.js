@@ -901,7 +901,7 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.GET_BIBLE_BOOKS, async (event, bibleId) => {
-    const apiKey = process.env.BIBLE_API_KEY;
+    const apiKey = settings.bibleApiKey || process.env.BIBLE_API_KEY;
     if (!apiKey) {
       return { error: 'API key not configured' };
     }
@@ -921,7 +921,7 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.GET_CHAPTERS, async (event, bibleId, bookId) => {
-    const apiKey = process.env.BIBLE_API_KEY;
+    const apiKey = settings.bibleApiKey || process.env.BIBLE_API_KEY;
     if (!apiKey) {
       return { error: 'API key not configured' };
     }
@@ -941,7 +941,7 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.GET_VERSES, async (event, bibleId, chapterId) => {
-    const apiKey = process.env.BIBLE_API_KEY;
+    const apiKey = settings.bibleApiKey || process.env.BIBLE_API_KEY;
     if (!apiKey) {
       return { error: 'API key not configured' };
     }
@@ -961,7 +961,7 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.GET_CHAPTER_INFO, async (event, bibleId, bookId, chapter) => {
-    const apiKey = process.env.BIBLE_API_KEY;
+    const apiKey = settings.bibleApiKey || process.env.BIBLE_API_KEY;
     if (!apiKey) {
       return { error: 'API key not configured' };
     }
