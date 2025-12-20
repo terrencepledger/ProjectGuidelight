@@ -1,5 +1,6 @@
 require('dotenv').config();
 const { app, BrowserWindow, ipcMain, screen, dialog, Menu } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const path = require('path');
 const fs = require('fs');
 const IPC = require('./src/shared/ipc-channels');
@@ -999,6 +1000,43 @@ function setupIPC() {
   });
 }
 
+function setupAutoUpdater() {
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info) => {
+    console.log('Update available:', info.version);
+    if (controlWindow) {
+      controlWindow.webContents.send(IPC.UPDATE_AVAILABLE, info);
+    }
+  });
+
+  autoUpdater.on('update-downloaded', (info) => {
+    console.log('Update downloaded:', info.version);
+    if (controlWindow) {
+      controlWindow.webContents.send(IPC.UPDATE_DOWNLOADED, info);
+    }
+  });
+
+  autoUpdater.on('error', (err) => {
+    console.error('Auto-updater error:', err);
+  });
+
+  ipcMain.on(IPC.INSTALL_UPDATE, () => {
+    autoUpdater.quitAndInstall();
+  });
+
+  ipcMain.handle(IPC.CHECK_FOR_UPDATES, async () => {
+    try {
+      const result = await autoUpdater.checkForUpdates();
+      return { success: true, version: result?.updateInfo?.version };
+    } catch (err) {
+      console.error('Update check failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+}
+
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   defaultStandbyPath = getDefaultStandbyPath();
@@ -1006,6 +1044,13 @@ app.whenReady().then(() => {
   settings = loadSettings();
   createWindows();
   setupIPC();
+  setupAutoUpdater();
+  
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch(err => {
+      console.log('Initial update check failed:', err.message);
+    });
+  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

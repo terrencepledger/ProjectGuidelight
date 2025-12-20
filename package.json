@@ -1,6 +1,6 @@
 {
   "name": "guidelight",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Church presentation control system for Greater Pentecostal Temple",
   "main": "main.js",
   "scripts": {
@@ -16,7 +16,8 @@
     "electronmon": "^2.0.4"
   },
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "electron-updater": "^6.6.2"
   },
   "build": {
     "appId": "com.gpt.guidelight",
@@ -39,6 +40,11 @@
     },
     "portable": {
       "artifactName": "Guidelight.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "terrencepledger",
+      "repo": "ProjectGuidelight"
     }
   }
 }

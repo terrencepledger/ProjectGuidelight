@@ -317,6 +317,7 @@ async function init() {
   setupModal();
   setupContextMenu();
   setupBlackoutMode();
+  setupUpdateBanner();
   renderImageGrid();
   updateLiveDisplay();
   loadActivePreset();
@@ -4221,6 +4222,37 @@ ipcRenderer.on(IPC.PRESENTATION_VISIBILITY, (event, visible) => {
   presentationVisible = visible;
   updateBlackoutOverlay();
 });
+
+ipcRenderer.on(IPC.UPDATE_AVAILABLE, (event, info) => {
+  const banner = document.getElementById('updateBanner');
+  const message = document.getElementById('updateMessage');
+  message.textContent = `Version ${info.version} is downloading...`;
+  banner.classList.add('visible');
+  document.getElementById('updateBtn').style.display = 'none';
+});
+
+ipcRenderer.on(IPC.UPDATE_DOWNLOADED, (event, info) => {
+  const banner = document.getElementById('updateBanner');
+  const message = document.getElementById('updateMessage');
+  const btn = document.getElementById('updateBtn');
+  message.textContent = `Version ${info.version} is ready to install!`;
+  btn.style.display = '';
+  banner.classList.add('visible');
+});
+
+function setupUpdateBanner() {
+  const banner = document.getElementById('updateBanner');
+  const btn = document.getElementById('updateBtn');
+  const dismiss = document.getElementById('updateDismiss');
+  
+  btn.addEventListener('click', () => {
+    ipcRenderer.send(IPC.INSTALL_UPDATE);
+  });
+  
+  dismiss.addEventListener('click', () => {
+    banner.classList.remove('visible');
+  });
+}
 
 function setupBlackoutMode() {
   const livePaneLabel = document.getElementById('livePaneLabel');
