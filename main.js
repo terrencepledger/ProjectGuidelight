@@ -1,8 +1,9 @@
 require('dotenv').config();
-const { app, BrowserWindow, ipcMain, screen, dialog, Menu } = require('electron');
-const { autoUpdater } = require('electron-updater');
+const { app, BrowserWindow, ipcMain, screen, dialog, Menu, shell } = require('electron');
+const https = require('https');
 const path = require('path');
 const fs = require('fs');
+const { spawn } = require('child_process');
 const IPC = require('./src/shared/ipc-channels');
 const { initSettings, loadSettings, saveSettings } = require('./src/shared/settings');
 
@@ -402,6 +403,10 @@ async function fetchVerse(apiKey, bibleId, verseId) {
 function setupIPC() {
   ipcMain.handle(IPC.GET_SETTINGS, () => {
     return settings;
+  });
+
+  ipcMain.handle(IPC.GET_APP_VERSION, () => {
+    return app.getVersion();
   });
 
   ipcMain.handle(IPC.SAVE_SETTINGS, (event, newSettings) => {
@@ -1000,40 +1005,164 @@ function setupIPC() {
   });
 }
 
+const UPDATE_REPO = 'terrencepledger/ProjectGuidelight';
+let updateInfo = null;
+
+function compareVersions(v1, v2) {
+  const parts1 = v1.replace(/^v/, '').split('.').map(Number);
+  const parts2 = v2.replace(/^v/, '').split('.').map(Number);
+  for (let i = 0; i < Math.max(parts1.length, parts2.length); i++) {
+    const p1 = parts1[i] || 0;
+    const p2 = parts2[i] || 0;
+    if (p1 > p2) return 1;
+    if (p1 < p2) return -1;
+  }
+  return 0;
+}
+
+function checkForUpdates() {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'api.github.com',
+      path: `/repos/${UPDATE_REPO}/releases/latest`,
+      headers: { 'User-Agent': 'Guidelight-App' }
+    };
+
+    https.get(options, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const release = JSON.parse(data);
+          if (release.tag_name) {
+            const currentVersion = app.getVersion();
+            const latestVersion = release.tag_name.replace(/^v/, '');
+            if (compareVersions(latestVersion, currentVersion) > 0) {
+              const exeAsset = release.assets.find(a => a.name.endsWith('.exe'));
+              updateInfo = {
+                version: latestVersion,
+                downloadUrl: exeAsset ? exeAsset.browser_download_url : null,
+                releaseUrl: release.html_url,
+                releaseNotes: release.body || ''
+              };
+              resolve(updateInfo);
+            } else {
+              resolve(null);
+            }
+          } else {
+            resolve(null);
+          }
+        } catch (err) {
+          reject(err);
+        }
+      });
+    }).on('error', reject);
+  });
+}
+
+function downloadUpdate(url, onProgress) {
+  return new Promise((resolve, reject) => {
+    const tempPath = path.join(app.getPath('temp'), 'Guidelight-update.exe');
+    const file = fs.createWriteStream(tempPath);
+
+    https.get(url, (res) => {
+      if (res.statusCode === 302 || res.statusCode === 301) {
+        file.close();
+        fs.unlinkSync(tempPath);
+        downloadUpdate(res.headers.location, onProgress).then(resolve).catch(reject);
+        return;
+      }
+
+      const totalSize = parseInt(res.headers['content-length'], 10);
+      let downloadedSize = 0;
+
+      res.on('data', (chunk) => {
+        downloadedSize += chunk.length;
+        if (onProgress && totalSize) {
+          onProgress(Math.round((downloadedSize / totalSize) * 100));
+        }
+      });
+
+      res.pipe(file);
+
+      file.on('finish', () => {
+        file.close();
+        resolve(tempPath);
+      });
+    }).on('error', (err) => {
+      fs.unlink(tempPath, () => {});
+      reject(err);
+    });
+  });
+}
+
+function applyUpdate(downloadedPath) {
+  const originalExe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
+  const batchPath = path.join(app.getPath('temp'), 'guidelight-update.bat');
+
+  const batchContent = `@echo off
+set RETRIES=0
+:RETRY
+timeout /t 2 /nobreak >nul
+copy /y "${downloadedPath}" "${originalExe}" >nul 2>&1
+if errorlevel 1 (
+  set /a RETRIES+=1
+  if %RETRIES% LSS 10 goto RETRY
+  goto END
+)
+del "${downloadedPath}"
+start "" "${originalExe}"
+:END
+del "%~f0"
+`;
+
+  fs.writeFileSync(batchPath, batchContent);
+  spawn('cmd.exe', ['/c', batchPath], { detached: true, stdio: 'ignore' }).unref();
+  app.quit();
+}
+
 function setupAutoUpdater() {
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('update-available', (info) => {
-    console.log('Update available:', info.version);
-    if (controlWindow) {
-      controlWindow.webContents.send(IPC.UPDATE_AVAILABLE, info);
-    }
-  });
-
-  autoUpdater.on('update-downloaded', (info) => {
-    console.log('Update downloaded:', info.version);
-    if (controlWindow) {
-      controlWindow.webContents.send(IPC.UPDATE_DOWNLOADED, info);
-    }
-  });
-
-  autoUpdater.on('error', (err) => {
-    console.error('Auto-updater error:', err);
-  });
-
-  ipcMain.on(IPC.INSTALL_UPDATE, () => {
-    autoUpdater.quitAndInstall();
-  });
-
   ipcMain.handle(IPC.CHECK_FOR_UPDATES, async () => {
     try {
-      const result = await autoUpdater.checkForUpdates();
-      return { success: true, version: result?.updateInfo?.version };
+      if (controlWindow) {
+        controlWindow.webContents.send(IPC.UPDATE_CHECKING);
+      }
+      const info = await checkForUpdates();
+      if (info) {
+        if (controlWindow) {
+          controlWindow.webContents.send(IPC.UPDATE_AVAILABLE, info);
+        }
+        return { success: true, updateAvailable: true, ...info };
+      }
+      return { success: true, updateAvailable: false };
     } catch (err) {
       console.error('Update check failed:', err);
       return { success: false, error: err.message };
     }
+  });
+
+  ipcMain.handle(IPC.DOWNLOAD_UPDATE, async () => {
+    if (!updateInfo || !updateInfo.downloadUrl) {
+      return { success: false, error: 'No update available' };
+    }
+    try {
+      const downloadedPath = await downloadUpdate(updateInfo.downloadUrl, (progress) => {
+        if (controlWindow) {
+          controlWindow.webContents.send(IPC.UPDATE_PROGRESS, progress);
+        }
+      });
+      if (controlWindow) {
+        controlWindow.webContents.send(IPC.UPDATE_DOWNLOADED);
+      }
+      return { success: true, path: downloadedPath };
+    } catch (err) {
+      console.error('Download failed:', err);
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.on(IPC.INSTALL_UPDATE, (event, downloadedPath) => {
+    applyUpdate(downloadedPath);
   });
 }
 
@@ -1046,11 +1175,17 @@ app.whenReady().then(() => {
   setupIPC();
   setupAutoUpdater();
   
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch(err => {
-      console.log('Initial update check failed:', err.message);
-    });
-  }, 3000);
+  if (app.isPackaged) {
+    setTimeout(() => {
+      checkForUpdates().then(info => {
+        if (info && controlWindow) {
+          controlWindow.webContents.send(IPC.UPDATE_AVAILABLE, info);
+        }
+      }).catch(err => {
+        console.log('Initial update check failed:', err.message);
+      });
+    }, 3000);
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

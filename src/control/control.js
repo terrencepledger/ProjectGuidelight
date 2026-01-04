@@ -24,6 +24,7 @@ const PRESET_LAYOUT_DEFAULTS = {
   welcome: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'medium', backgroundDim: 0 },
   prayer: { verticalAlign: 'top', horizontalAlign: 'center', textWidth: 'wide', backgroundDim: 10 },
   lyrics: { verticalAlign: 'bottom', horizontalAlign: 'center', textWidth: 'medium', backgroundDim: 15 },
+  countdown: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'medium', backgroundDim: 0 },
   custom: { verticalAlign: 'center', horizontalAlign: 'center', textWidth: 'wide', backgroundDim: 0 }
 };
 
@@ -181,7 +182,7 @@ function parseBodyForLists(text) {
   return escapeHtml(text).replace(/\n/g, '<br>');
 }
 
-function createQuickSlide({ id, preset, title, body, background, backgroundImage, fontFamily, titleFontSize, fontSize, fontColor, verticalAlign, horizontalAlign, textWidth, backgroundDim, elements, displayName }) {
+function createQuickSlide({ id, preset, title, body, background, backgroundImage, fontFamily, titleFontSize, fontSize, fontColor, verticalAlign, horizontalAlign, textWidth, backgroundDim, elements, displayName, countdownLabel, durationMinutes, durationSeconds, endTime }) {
   const presetKey = preset || 'announcement';
   const defaults = PRESET_LAYOUT_DEFAULTS[presetKey] || PRESET_LAYOUT_DEFAULTS.announcement;
   return {
@@ -201,17 +202,24 @@ function createQuickSlide({ id, preset, title, body, background, backgroundImage
     verticalAlign: verticalAlign !== undefined ? verticalAlign : defaults.verticalAlign,
     horizontalAlign: horizontalAlign !== undefined ? horizontalAlign : defaults.horizontalAlign,
     textWidth: textWidth !== undefined ? textWidth : defaults.textWidth,
-    backgroundDim: backgroundDim !== undefined ? backgroundDim : defaults.backgroundDim
+    backgroundDim: backgroundDim !== undefined ? backgroundDim : defaults.backgroundDim,
+    countdownLabel: countdownLabel || '',
+    durationMinutes: durationMinutes !== undefined ? durationMinutes : 5,
+    durationSeconds: durationSeconds !== undefined ? durationSeconds : 0,
+    endTime: endTime || null
   };
 }
 
-function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWidth }) {
+function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWidth, offsetX, offsetY, fontColor }) {
   return {
     type: type || 'body',
     text: text || '',
     verticalAlign: verticalAlign || 'center',
     horizontalAlign: horizontalAlign || 'center',
-    textWidth: textWidth || 'wide'
+    textWidth: textWidth || 'wide',
+    offsetX: offsetX || 0,
+    offsetY: offsetY || 0,
+    fontColor: fontColor || null
   };
 }
 
@@ -293,6 +301,9 @@ async function init() {
   displayResolution = await ipcRenderer.invoke(IPC.GET_DISPLAY_RESOLUTION);
   slideshowPresets = await ipcRenderer.invoke(IPC.GET_SLIDESHOW_PRESETS);
   quickSlides = await ipcRenderer.invoke(IPC.GET_QUICK_SLIDES);
+  
+  const appVersion = await ipcRenderer.invoke(IPC.GET_APP_VERSION);
+  document.getElementById('versionInfo').textContent = `v${appVersion}`;
   
   await validateBrokenPaths();
   
@@ -798,23 +809,48 @@ function updatePreviewDisplay() {
     const bg = staged.background || '#000000';
     const bgImage = staged.backgroundImage ? staged.backgroundImage.replace(/\\/g, '/') : null;
     const fontFamily = staged.fontFamily || 'Georgia';
+    const titleFontSize = staged.titleFontSize || 60;
     const fontSize = staged.fontSize || 48;
     const fontColor = staged.fontColor || '#FFFFFF';
+    const backgroundDim = staged.backgroundDim !== undefined ? staged.backgroundDim : 0;
     
     const previewFontSize = Math.round(fontSize * 0.3);
-    const previewTitleSize = Math.round(fontSize * 0.35);
+    const previewTitleSize = Math.round(titleFontSize * 0.3);
     
     let bgStyle = bgImage 
       ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
       : `background-color: ${bg};`;
     
-    const showTitle = staged.preset === 'announcement' || staged.preset === 'prayer';
-    const titleHtml = showTitle && staged.title 
-      ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${staged.title}</div>` 
-      : '';
-    const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${staged.body}</div>`;
-    
-    previewEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
+    if (staged.preset === 'custom' && staged.elements) {
+      let elementsHtml = staged.elements.map(el => {
+        const elFontSize = el.type === 'title' ? previewTitleSize : previewFontSize;
+        const elColor = el.fontColor || fontColor;
+        const ox = el.offsetX || 0;
+        const oy = el.offsetY || 0;
+        const baseX = el.horizontalAlign === 'center' ? -50 : 0;
+        const baseY = el.verticalAlign === 'center' ? -50 : 0;
+        const transformStyle = `transform: translate(calc(${baseX}% + ${ox}%), calc(${baseY}% + ${oy}%));`;
+        const fontWeight = el.type === 'title' ? 'font-weight: bold;' : '';
+        return `<div class="qs-staged-el v-${el.verticalAlign} h-${el.horizontalAlign} w-${el.textWidth}" style="font-family: ${fontFamily}, serif; font-size: ${elFontSize}px; color: ${elColor}; ${fontWeight} ${transformStyle}">${el.text}</div>`;
+      }).join('');
+      previewEl.innerHTML = `<div class="quick-slide-preview custom-mode" style="${bgStyle} --dim-opacity: ${backgroundDim / 100};">${elementsHtml}</div>`;
+    } else if (staged.preset === 'countdown') {
+      const labelHtml = staged.countdownLabel 
+        ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; margin-bottom: 0.25rem;">${escapeHtml(staged.countdownLabel)}</div>`
+        : '';
+      const mins = staged.durationMinutes || 0;
+      const secs = staged.durationSeconds || 0;
+      const timerDisplay = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+      const timerHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize * 1.5}px; color: ${fontColor}; font-weight: bold;">${timerDisplay}</div>`;
+      previewEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle} display: flex; flex-direction: column; justify-content: center; align-items: center;">${labelHtml}${timerHtml}</div>`;
+    } else {
+      const showTitle = staged.preset === 'announcement' || staged.preset === 'prayer';
+      const titleHtml = showTitle && staged.title 
+        ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${staged.title}</div>` 
+        : '';
+      const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${staged.body}</div>`;
+      previewEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
+    }
     cleanupPreviewVideo();
     cleanupPreviewAudio();
   }
@@ -939,13 +975,28 @@ function updateLiveDisplay() {
       ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
       : `background-color: ${bg};`;
     
-    const showTitle = live.preset === 'announcement' || live.preset === 'prayer';
-    const titleHtml = showTitle && live.title 
-      ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${live.title}</div>` 
-      : '';
-    const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${live.body}</div>`;
+    let contentHtml = '';
     
-    liveEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
+    if (live.preset === 'countdown') {
+      const labelHtml = live.countdownLabel 
+        ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; margin-bottom: 0.25rem;">${escapeHtml(live.countdownLabel)}</div>`
+        : '';
+      const timerHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize * 1.5}px; color: ${fontColor}; font-weight: bold;">⏱</div>`;
+      contentHtml = labelHtml + timerHtml;
+    } else if (live.preset === 'custom' && live.elements && live.elements.length > 0) {
+      const summaryText = live.elements.map(el => el.text || '').filter(t => t).join(' / ');
+      const truncated = summaryText.length > 40 ? summaryText.substring(0, 40) + '...' : summaryText;
+      contentHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${escapeHtml(truncated)}</div>`;
+    } else {
+      const showTitle = live.preset === 'announcement' || live.preset === 'prayer';
+      const titleHtml = showTitle && live.title 
+        ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${escapeHtml(live.title)}</div>` 
+        : '';
+      const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${escapeHtml(live.body)}</div>`;
+      contentHtml = titleHtml + bodyHtml;
+    }
+    
+    liveEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${contentHtml}</div>`;
   }
   
   mediaNameEl.textContent = getMediaName(live);
@@ -1054,17 +1105,35 @@ function setupDisplayControls() {
       stopLiveSlideshowTimer();
       stopLiveVideo();
       stopLiveAudio();
-      ipcRenderer.send(IPC.SHOW_QUICK_SLIDE, {
+      
+      const slideData = {
         preset: staged.preset,
         title: staged.title,
         body: staged.body,
+        elements: staged.elements,
         background: staged.background,
         backgroundImage: staged.backgroundImage,
+        backgroundDim: staged.backgroundDim,
         fontFamily: staged.fontFamily,
+        titleFontSize: staged.titleFontSize,
         fontSize: staged.fontSize,
-        fontColor: staged.fontColor
-      });
-      live = { ...staged };
+        fontColor: staged.fontColor,
+        verticalAlign: staged.verticalAlign,
+        horizontalAlign: staged.horizontalAlign,
+        textWidth: staged.textWidth,
+        countdownLabel: staged.countdownLabel,
+        durationMinutes: staged.durationMinutes,
+        durationSeconds: staged.durationSeconds,
+        endTime: staged.endTime
+      };
+      
+      if (staged.preset === 'countdown' && !staged.endTime) {
+        const durationMs = ((staged.durationMinutes || 0) * 60 + (staged.durationSeconds || 0)) * 1000;
+        slideData.endTime = Date.now() + durationMs;
+      }
+      
+      ipcRenderer.send(IPC.SHOW_QUICK_SLIDE, slideData);
+      live = { ...staged, endTime: slideData.endTime };
       isSynced = true;
       updateLiveDisplay();
       updateGoLiveButton();
@@ -1367,24 +1436,54 @@ function renderQuickSlideThumbnail(slide, container) {
     preview.style.backgroundColor = slide.background || '#000';
   }
   
-  const showTitle = slide.preset === 'announcement' || slide.preset === 'prayer';
-  
-  if (showTitle && slide.title) {
-    const titleEl = document.createElement('div');
-    titleEl.className = 'qs-thumb-title';
-    titleEl.style.color = slide.fontColor || '#fff';
-    titleEl.style.fontFamily = slide.fontFamily || 'Georgia';
-    titleEl.textContent = slide.title;
-    preview.appendChild(titleEl);
-  }
-  
-  if (slide.body) {
-    const bodyEl = document.createElement('div');
-    bodyEl.className = 'qs-thumb-body';
-    bodyEl.style.color = slide.fontColor || '#fff';
-    bodyEl.style.fontFamily = slide.fontFamily || 'Georgia';
-    bodyEl.textContent = slide.body.length > 50 ? slide.body.substring(0, 50) + '...' : slide.body;
-    preview.appendChild(bodyEl);
+  if (slide.preset === 'countdown') {
+    if (slide.countdownLabel) {
+      const labelEl = document.createElement('div');
+      labelEl.className = 'qs-thumb-body';
+      labelEl.style.color = slide.fontColor || '#fff';
+      labelEl.style.fontFamily = slide.fontFamily || 'Georgia';
+      labelEl.textContent = slide.countdownLabel;
+      preview.appendChild(labelEl);
+    }
+    const timerEl = document.createElement('div');
+    timerEl.className = 'qs-thumb-title';
+    timerEl.style.color = slide.fontColor || '#fff';
+    timerEl.style.fontFamily = slide.fontFamily || 'Georgia';
+    const mins = slide.durationMinutes || 0;
+    const secs = slide.durationSeconds || 0;
+    timerEl.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    preview.appendChild(timerEl);
+  } else if (slide.preset === 'custom' && slide.elements && slide.elements.length > 0) {
+    const summaryText = slide.elements.map(el => el.text || '').filter(t => t).join(' / ');
+    const truncated = summaryText.length > 40 ? summaryText.substring(0, 40) + '...' : summaryText;
+    if (truncated) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'qs-thumb-body';
+      bodyEl.style.color = slide.fontColor || '#fff';
+      bodyEl.style.fontFamily = slide.fontFamily || 'Georgia';
+      bodyEl.textContent = truncated;
+      preview.appendChild(bodyEl);
+    }
+  } else {
+    const showTitle = slide.preset === 'announcement' || slide.preset === 'prayer';
+    
+    if (showTitle && slide.title) {
+      const titleEl = document.createElement('div');
+      titleEl.className = 'qs-thumb-title';
+      titleEl.style.color = slide.fontColor || '#fff';
+      titleEl.style.fontFamily = slide.fontFamily || 'Georgia';
+      titleEl.textContent = slide.title;
+      preview.appendChild(titleEl);
+    }
+    
+    if (slide.body) {
+      const bodyEl = document.createElement('div');
+      bodyEl.className = 'qs-thumb-body';
+      bodyEl.style.color = slide.fontColor || '#fff';
+      bodyEl.style.fontFamily = slide.fontFamily || 'Georgia';
+      bodyEl.textContent = slide.body.length > 50 ? slide.body.substring(0, 50) + '...' : slide.body;
+      preview.appendChild(bodyEl);
+    }
   }
   
   const badge = document.createElement('div');
@@ -1434,6 +1533,10 @@ function selectMedia(file) {
   
   if (file.type === 'quick-slide') {
     staged = { ...file };
+    if (file.preset === 'countdown') {
+      const durationMs = ((file.durationMinutes || 0) * 60 + (file.durationSeconds || 0)) * 1000;
+      staged.endTime = Date.now() + durationMs;
+    }
   } else {
     const displayName = file.displayName || path.basename(file.path).replace(/\.[^/.]+$/, '');
     
@@ -3360,12 +3463,15 @@ let currentQsBgType = 'color';
 let editingQuickSlideId = null;
 let customSlideElements = [];
 let defaultQuickSlideBackgrounds = [];
+let customQsBgImagePath = null;
 
 function setupQuickSlidesControls() {
   const presetBtns = document.querySelectorAll('.qs-preset-btn');
   const titleRow = document.getElementById('qsTitleRow');
   const bodyRow = document.getElementById('qsBodyRow');
   const elementsRow = document.getElementById('qsElementsRow');
+  const countdownLabelRow = document.getElementById('qsCountdownLabelRow');
+  const countdownDurationRow = document.getElementById('qsCountdownDurationRow');
   const titleInput = document.getElementById('qsTitle');
   const bodyInput = document.getElementById('qsBody');
   const addTitleBtn = document.getElementById('qsAddTitleBtn');
@@ -3394,11 +3500,14 @@ function setupQuickSlidesControls() {
       currentQsPreset = btn.dataset.preset;
       
       const isCustom = currentQsPreset === 'custom';
+      const isCountdown = currentQsPreset === 'countdown';
       const showTitle = currentQsPreset === 'announcement' || currentQsPreset === 'prayer';
       
-      titleRow.classList.toggle('hidden', isCustom || !showTitle);
-      bodyRow.style.display = isCustom ? 'none' : '';
+      titleRow.classList.toggle('hidden', isCustom || isCountdown || !showTitle);
+      bodyRow.style.display = (isCustom || isCountdown) ? 'none' : '';
       elementsRow.style.display = isCustom ? '' : 'none';
+      countdownLabelRow.style.display = isCountdown ? '' : 'none';
+      countdownDurationRow.style.display = isCountdown ? '' : 'none';
       
       if (isCustom) {
         customSlideElements = [];
@@ -3444,17 +3553,55 @@ function setupQuickSlidesControls() {
     });
   });
 
-  bgImageSelect.addEventListener('change', updateQsPreview);
+  bgImageSelect.addEventListener('change', () => {
+    customQsBgImagePath = null;
+    document.getElementById('qsCustomBgLabel').textContent = '';
+    updateQsPreview();
+  });
+
+  const bgBrowseBtn = document.getElementById('qsBgBrowseBtn');
+  bgBrowseBtn.addEventListener('click', async () => {
+    const files = await ipcRenderer.invoke(IPC.PICK_FILE, [
+      { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
+    ]);
+    if (files && files.length > 0) {
+      customQsBgImagePath = files[0];
+      bgImageSelect.value = '';
+      document.getElementById('qsCustomBgLabel').textContent = path.basename(files[0]);
+      updateQsPreview();
+    }
+  });
 
   titleInput.addEventListener('input', updateQsPreview);
   bodyInput.addEventListener('input', updateQsPreview);
+  bodyInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const start = bodyInput.selectionStart;
+      const end = bodyInput.selectionEnd;
+      const value = bodyInput.value;
+      bodyInput.value = value.substring(0, start) + '\n' + value.substring(end);
+      bodyInput.selectionStart = bodyInput.selectionEnd = start + 1;
+      updateQsPreview();
+    }
+  });
   fontFamily.addEventListener('change', updateQsPreview);
   titleFontSize.addEventListener('change', updateQsPreview);
   fontSize.addEventListener('change', updateQsPreview);
   fontColor.addEventListener('input', updateQsPreview);
   bgColor.addEventListener('input', updateQsPreview);
 
+  const countdownLabelInput = document.getElementById('qsCountdownLabel');
+  const countdownMinInput = document.getElementById('qsCountdownMin');
+  const countdownSecInput = document.getElementById('qsCountdownSec');
+  countdownLabelInput.addEventListener('input', updateQsPreview);
+  countdownMinInput.addEventListener('input', updateQsPreview);
+  countdownSecInput.addEventListener('input', updateQsPreview);
+
   saveBtn.addEventListener('click', saveQuickSlide);
+
+  const stageBtn = document.getElementById('qsStageBtn');
+  stageBtn.addEventListener('click', stageQuickSlide);
 
   const initDimSlider = document.getElementById('qsBackgroundDim');
   initDimSlider.style.setProperty('--fill-percent', (initDimSlider.value / initDimSlider.max) * 100 + '%');
@@ -3495,7 +3642,7 @@ function updateQsPreview() {
   const fontColor = document.getElementById('qsFontColor').value;
   const bgColor = document.getElementById('qsBgColor').value;
   const bgImageSelect = document.getElementById('qsBgImageSelect');
-  const bgImagePath = bgImageSelect.value;
+  const bgImagePath = customQsBgImagePath || bgImageSelect.value;
 
   const defaults = PRESET_LAYOUT_DEFAULTS[currentQsPreset] || PRESET_LAYOUT_DEFAULTS.announcement;
   const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value) || defaults.backgroundDim;
@@ -3530,10 +3677,50 @@ function updateQsPreview() {
       if (el.type === 'title') div.classList.add('el-title');
       div.style.fontFamily = fontFamily;
       div.style.fontSize = (el.type === 'title' ? scaledTitleSize : scaledFontSize) + 'px';
-      div.style.color = fontColor;
+      div.style.color = el.fontColor || fontColor;
+      const ox = el.offsetX || 0;
+      const oy = el.offsetY || 0;
+      const baseX = el.horizontalAlign === 'center' ? -50 : 0;
+      const baseY = el.verticalAlign === 'center' ? -50 : 0;
+      div.style.transform = `translate(calc(${baseX}% + ${ox}%), calc(${baseY}% + ${oy}%))`;
       div.innerHTML = el.type === 'title' ? escapeHtml(el.text) : parseBodyForLists(el.text);
       previewCustom.appendChild(div);
     });
+  } else if (currentQsPreset === 'countdown') {
+    previewTitle.style.display = 'none';
+    previewBody.style.display = 'none';
+    previewCustom.classList.add('active');
+    previewCustom.innerHTML = '';
+    
+    const countdownLabel = document.getElementById('qsCountdownLabel').value;
+    const mins = parseInt(document.getElementById('qsCountdownMin').value) || 0;
+    const secs = parseInt(document.getElementById('qsCountdownSec').value) || 0;
+    const timerDisplay = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+    
+    const defaults = PRESET_LAYOUT_DEFAULTS.countdown;
+    const vAlignMap = { top: 'flex-start', center: 'center', bottom: 'flex-end' };
+    const hAlignMap = { left: 'flex-start', center: 'center', right: 'flex-end' };
+    previewArea.style.justifyContent = vAlignMap[defaults.verticalAlign] || 'center';
+    previewArea.style.alignItems = hAlignMap[defaults.horizontalAlign] || 'center';
+    previewArea.style.textAlign = 'center';
+    
+    if (countdownLabel) {
+      const labelDiv = document.createElement('div');
+      labelDiv.className = 'qs-preview-countdown-label';
+      labelDiv.style.fontFamily = fontFamily;
+      labelDiv.style.fontSize = scaledFontSize + 'px';
+      labelDiv.style.color = fontColor;
+      labelDiv.textContent = countdownLabel;
+      previewCustom.appendChild(labelDiv);
+    }
+    
+    const timerDiv = document.createElement('div');
+    timerDiv.className = 'qs-preview-countdown-timer';
+    timerDiv.style.fontFamily = fontFamily;
+    timerDiv.style.fontSize = (scaledTitleSize * 1.5) + 'px';
+    timerDiv.style.color = fontColor;
+    timerDiv.textContent = timerDisplay;
+    previewCustom.appendChild(timerDiv);
   } else {
     previewTitle.style.display = '';
     previewBody.style.display = '';
@@ -3586,10 +3773,13 @@ async function saveQuickSlide() {
   const fontColor = document.getElementById('qsFontColor').value;
   const bgColor = document.getElementById('qsBgColor').value;
   const bgImageSelect = document.getElementById('qsBgImageSelect');
-  const bgImagePath = bgImageSelect.value;
+  const bgImagePath = customQsBgImagePath || bgImageSelect.value;
   const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value);
+  const countdownLabel = document.getElementById('qsCountdownLabel').value.trim();
+  const countdownMin = parseInt(document.getElementById('qsCountdownMin').value) || 0;
+  const countdownSec = parseInt(document.getElementById('qsCountdownSec').value) || 0;
 
-  if (currentQsPreset !== 'custom' && !bodyInput.value.trim()) {
+  if (currentQsPreset !== 'custom' && currentQsPreset !== 'countdown' && !bodyInput.value.trim()) {
     alert('Please enter content for the slide.');
     return;
   }
@@ -3600,8 +3790,8 @@ async function saveQuickSlide() {
     id: editingQuickSlideId || null,
     preset: currentQsPreset,
     displayName,
-    title: currentQsPreset !== 'custom' ? titleInput.value.trim() : '',
-    body: currentQsPreset !== 'custom' ? bodyInput.value.trim() : '',
+    title: (currentQsPreset !== 'custom' && currentQsPreset !== 'countdown') ? titleInput.value.trim() : '',
+    body: (currentQsPreset !== 'custom' && currentQsPreset !== 'countdown') ? bodyInput.value.trim() : '',
     elements: currentQsPreset === 'custom' ? customSlideElements : null,
     background: currentQsBgType === 'color' ? bgColor : '#000000',
     backgroundImage: currentQsBgType === 'image' && bgImagePath ? bgImagePath : null,
@@ -3612,7 +3802,11 @@ async function saveQuickSlide() {
     verticalAlign: defaults.verticalAlign,
     horizontalAlign: defaults.horizontalAlign,
     textWidth: defaults.textWidth,
-    backgroundDim
+    backgroundDim,
+    countdownLabel: currentQsPreset === 'countdown' ? countdownLabel : '',
+    durationMinutes: currentQsPreset === 'countdown' ? countdownMin : 5,
+    durationSeconds: currentQsPreset === 'countdown' ? countdownSec : 0,
+    endTime: null
   });
 
   const result = await ipcRenderer.invoke(IPC.SAVE_QUICK_SLIDE, slide);
@@ -3623,6 +3817,57 @@ async function saveQuickSlide() {
     renderImageGrid();
     alert(wasEditing ? 'Slide updated!' : 'Slide saved!');
   }
+}
+
+function stageQuickSlide() {
+  const displayName = document.getElementById('qsDisplayName').value.trim();
+  const titleInput = document.getElementById('qsTitle');
+  const bodyInput = document.getElementById('qsBody');
+  const fontFamily = document.getElementById('qsFontFamily').value;
+  const titleFontSize = parseInt(document.getElementById('qsTitleFontSize').value);
+  const fontSize = parseInt(document.getElementById('qsFontSize').value);
+  const fontColor = document.getElementById('qsFontColor').value;
+  const bgColor = document.getElementById('qsBgColor').value;
+  const bgImageSelect = document.getElementById('qsBgImageSelect');
+  const bgImagePath = customQsBgImagePath || bgImageSelect.value;
+  const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value);
+  const countdownLabel = document.getElementById('qsCountdownLabel').value.trim();
+  const countdownMin = parseInt(document.getElementById('qsCountdownMin').value) || 0;
+  const countdownSec = parseInt(document.getElementById('qsCountdownSec').value) || 0;
+
+  const defaults = PRESET_LAYOUT_DEFAULTS[currentQsPreset] || PRESET_LAYOUT_DEFAULTS.announcement;
+
+  let endTime = null;
+  if (currentQsPreset === 'countdown') {
+    const durationMs = (countdownMin * 60 + countdownSec) * 1000;
+    endTime = Date.now() + durationMs;
+  }
+
+  staged = createQuickSlide({
+    id: null,
+    preset: currentQsPreset,
+    displayName,
+    title: (currentQsPreset !== 'custom' && currentQsPreset !== 'countdown') ? titleInput.value.trim() : '',
+    body: (currentQsPreset !== 'custom' && currentQsPreset !== 'countdown') ? bodyInput.value.trim() : '',
+    elements: currentQsPreset === 'custom' ? customSlideElements : null,
+    background: currentQsBgType === 'color' ? bgColor : '#000000',
+    backgroundImage: currentQsBgType === 'image' && bgImagePath ? bgImagePath : null,
+    fontFamily,
+    titleFontSize,
+    fontSize,
+    fontColor,
+    verticalAlign: defaults.verticalAlign,
+    horizontalAlign: defaults.horizontalAlign,
+    textWidth: defaults.textWidth,
+    backgroundDim,
+    countdownLabel: currentQsPreset === 'countdown' ? countdownLabel : '',
+    durationMinutes: currentQsPreset === 'countdown' ? countdownMin : 5,
+    durationSeconds: currentQsPreset === 'countdown' ? countdownSec : 0,
+    endTime
+  });
+
+  updatePreviewDisplay();
+  updateGoLiveButton();
 }
 
 function renderCustomElementsList() {
@@ -3650,10 +3895,18 @@ function renderCustomElementsList() {
     typeLabel.className = 'qs-element-type';
     typeLabel.textContent = el.type;
     
-    const textInput = document.createElement('input');
-    textInput.type = 'text';
-    textInput.className = 'qs-element-text';
-    textInput.placeholder = el.type === 'title' ? 'Enter title...' : 'Enter body text...';
+    let textInput;
+    if (el.type === 'body') {
+      textInput = document.createElement('textarea');
+      textInput.className = 'qs-element-text qs-element-textarea';
+      textInput.placeholder = 'Enter body text...';
+      textInput.rows = 3;
+    } else {
+      textInput = document.createElement('input');
+      textInput.type = 'text';
+      textInput.className = 'qs-element-text';
+      textInput.placeholder = 'Enter title...';
+    }
     textInput.value = el.text;
     textInput.addEventListener('input', () => {
       customSlideElements[index].text = textInput.value;
@@ -3669,8 +3922,38 @@ function renderCustomElementsList() {
       updateQsPreview();
     });
     
+    const moveUpBtn = document.createElement('button');
+    moveUpBtn.className = 'qs-element-reorder';
+    moveUpBtn.innerHTML = '↑';
+    moveUpBtn.title = 'Move up';
+    moveUpBtn.disabled = index === 0;
+    moveUpBtn.addEventListener('click', () => {
+      if (index > 0) {
+        [customSlideElements[index - 1], customSlideElements[index]] = 
+          [customSlideElements[index], customSlideElements[index - 1]];
+        renderCustomElementsList();
+        updateQsPreview();
+      }
+    });
+    
+    const moveDownBtn = document.createElement('button');
+    moveDownBtn.className = 'qs-element-reorder';
+    moveDownBtn.innerHTML = '↓';
+    moveDownBtn.title = 'Move down';
+    moveDownBtn.disabled = index === customSlideElements.length - 1;
+    moveDownBtn.addEventListener('click', () => {
+      if (index < customSlideElements.length - 1) {
+        [customSlideElements[index], customSlideElements[index + 1]] = 
+          [customSlideElements[index + 1], customSlideElements[index]];
+        renderCustomElementsList();
+        updateQsPreview();
+      }
+    });
+    
     topRow.appendChild(typeLabel);
     topRow.appendChild(textInput);
+    topRow.appendChild(moveUpBtn);
+    topRow.appendChild(moveDownBtn);
     topRow.appendChild(removeBtn);
     
     const posRow = document.createElement('div');
@@ -3691,12 +3974,81 @@ function renderCustomElementsList() {
       updateQsPreview();
     });
     
+    const colorWrapper = document.createElement('div');
+    colorWrapper.className = 'qs-element-pos-item';
+    const colorLabel = document.createElement('span');
+    colorLabel.className = 'qs-element-pos-label';
+    colorLabel.textContent = 'C';
+    const colorInput = document.createElement('input');
+    colorInput.type = 'color';
+    colorInput.className = 'qs-element-color';
+    const slideFontColor = document.getElementById('qsFontColor').value;
+    colorInput.value = el.fontColor || slideFontColor;
+    colorInput.addEventListener('input', () => {
+      customSlideElements[index].fontColor = colorInput.value;
+      updateQsPreview();
+    });
+    colorWrapper.appendChild(colorLabel);
+    colorWrapper.appendChild(colorInput);
+    
     posRow.appendChild(vAlignSelect);
     posRow.appendChild(hAlignSelect);
     posRow.appendChild(widthSelect);
+    posRow.appendChild(colorWrapper);
+    
+    const nudgeRow = document.createElement('div');
+    nudgeRow.className = 'qs-element-nudge-row';
+    
+    const nudgeLabel = document.createElement('span');
+    nudgeLabel.className = 'qs-element-nudge-label';
+    nudgeLabel.textContent = 'Nudge:';
+    
+    const createNudgeBtn = (symbol, axis, delta) => {
+      const btn = document.createElement('button');
+      btn.className = 'qs-nudge-btn';
+      btn.textContent = symbol;
+      btn.addEventListener('click', () => {
+        const prop = axis === 'x' ? 'offsetX' : 'offsetY';
+        const current = customSlideElements[index][prop] || 0;
+        const newVal = Math.max(-50, Math.min(50, current + delta));
+        customSlideElements[index][prop] = newVal;
+        updateNudgeIndicator();
+        updateQsPreview();
+      });
+      return btn;
+    };
+    
+    const nudgeIndicator = document.createElement('span');
+    nudgeIndicator.className = 'qs-nudge-indicator';
+    const updateNudgeIndicator = () => {
+      const ox = customSlideElements[index].offsetX || 0;
+      const oy = customSlideElements[index].offsetY || 0;
+      nudgeIndicator.textContent = (ox !== 0 || oy !== 0) ? `(${ox}, ${oy})` : '';
+    };
+    updateNudgeIndicator();
+    
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'qs-nudge-btn qs-nudge-reset';
+    resetBtn.textContent = '⟲';
+    resetBtn.title = 'Reset offsets';
+    resetBtn.addEventListener('click', () => {
+      customSlideElements[index].offsetX = 0;
+      customSlideElements[index].offsetY = 0;
+      updateNudgeIndicator();
+      updateQsPreview();
+    });
+    
+    nudgeRow.appendChild(nudgeLabel);
+    nudgeRow.appendChild(createNudgeBtn('←', 'x', -5));
+    nudgeRow.appendChild(createNudgeBtn('→', 'x', 5));
+    nudgeRow.appendChild(createNudgeBtn('↑', 'y', -5));
+    nudgeRow.appendChild(createNudgeBtn('↓', 'y', 5));
+    nudgeRow.appendChild(nudgeIndicator);
+    nudgeRow.appendChild(resetBtn);
     
     item.appendChild(topRow);
     item.appendChild(posRow);
+    item.appendChild(nudgeRow);
     elementsList.appendChild(item);
   });
 }
@@ -3737,10 +4089,12 @@ function clearQuickSlideForm() {
   document.getElementById('qsFontColor').value = '#FFFFFF';
   document.getElementById('qsBgColor').value = '#000000';
   document.getElementById('qsBgImageSelect').value = '';
+  document.getElementById('qsCustomBgLabel').textContent = '';
   editingQuickSlideId = null;
   currentQsPreset = 'announcement';
   currentQsBgType = 'color';
   customSlideElements = [];
+  customQsBgImagePath = null;
   
   document.querySelectorAll('.qs-preset-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.preset === 'announcement');
@@ -3757,6 +4111,11 @@ function clearQuickSlideForm() {
   document.getElementById('qsAddBodyBtn').disabled = false;
   document.getElementById('qsBgColorGroup').style.display = '';
   document.getElementById('qsBgImageGroup').style.display = 'none';
+  document.getElementById('qsCountdownLabelRow').style.display = 'none';
+  document.getElementById('qsCountdownDurationRow').style.display = 'none';
+  document.getElementById('qsCountdownLabel').value = '';
+  document.getElementById('qsCountdownMin').value = '5';
+  document.getElementById('qsCountdownSec').value = '0';
   
   const dimSlider = document.getElementById('qsBackgroundDim');
   dimSlider.value = 0;
@@ -3774,6 +4133,13 @@ function loadQuickSlideForEdit(slide) {
   currentQsBgType = slide.backgroundImage ? 'image' : 'color';
   customSlideElements = slide.preset === 'custom' && slide.elements ? [...slide.elements] : [];
   
+  const isPresetBg = slide.backgroundImage && defaultQuickSlideBackgrounds.some(bg => bg.path === slide.backgroundImage);
+  if (slide.backgroundImage && !isPresetBg) {
+    customQsBgImagePath = slide.backgroundImage;
+  } else {
+    customQsBgImagePath = null;
+  }
+  
   document.getElementById('qsDisplayName').value = slide.displayName || '';
   document.getElementById('qsTitle').value = slide.title || '';
   document.getElementById('qsBody').value = slide.body || '';
@@ -3782,7 +4148,8 @@ function loadQuickSlideForEdit(slide) {
   document.getElementById('qsFontSize').value = slide.fontSize || 48;
   document.getElementById('qsFontColor').value = slide.fontColor || '#FFFFFF';
   document.getElementById('qsBgColor').value = slide.background || '#000000';
-  document.getElementById('qsBgImageSelect').value = slide.backgroundImage || '';
+  document.getElementById('qsBgImageSelect').value = isPresetBg ? slide.backgroundImage : '';
+  document.getElementById('qsCustomBgLabel').textContent = customQsBgImagePath ? path.basename(customQsBgImagePath) : '';
   
   document.querySelectorAll('.qs-preset-btn').forEach(b => {
     b.classList.toggle('active', b.dataset.preset === slide.preset);
@@ -3792,15 +4159,24 @@ function loadQuickSlideForEdit(slide) {
   });
   
   const isCustom = slide.preset === 'custom';
+  const isCountdown = slide.preset === 'countdown';
   const showTitle = slide.preset === 'announcement' || slide.preset === 'prayer';
-  document.getElementById('qsTitleRow').classList.toggle('hidden', isCustom || !showTitle);
-  document.getElementById('qsBodyRow').style.display = isCustom ? 'none' : '';
+  document.getElementById('qsTitleRow').classList.toggle('hidden', isCustom || isCountdown || !showTitle);
+  document.getElementById('qsBodyRow').style.display = (isCustom || isCountdown) ? 'none' : '';
   document.getElementById('qsElementsRow').style.display = isCustom ? '' : 'none';
+  document.getElementById('qsCountdownLabelRow').style.display = isCountdown ? '' : 'none';
+  document.getElementById('qsCountdownDurationRow').style.display = isCountdown ? '' : 'none';
   document.getElementById('qsBgColorGroup').style.display = currentQsBgType === 'color' ? '' : 'none';
   document.getElementById('qsBgImageGroup').style.display = currentQsBgType === 'image' ? '' : 'none';
   
   if (isCustom) {
     renderCustomElementsList();
+  }
+  
+  if (isCountdown) {
+    document.getElementById('qsCountdownLabel').value = slide.countdownLabel || '';
+    document.getElementById('qsCountdownMin').value = slide.durationMinutes !== undefined ? slide.durationMinutes : 5;
+    document.getElementById('qsCountdownSec').value = slide.durationSeconds !== undefined ? slide.durationSeconds : 0;
   }
   
   const dimSlider = document.getElementById('qsBackgroundDim');
@@ -4226,27 +4602,66 @@ ipcRenderer.on(IPC.PRESENTATION_VISIBILITY, (event, visible) => {
 ipcRenderer.on(IPC.UPDATE_AVAILABLE, (event, info) => {
   const banner = document.getElementById('updateBanner');
   const message = document.getElementById('updateMessage');
-  message.textContent = `Version ${info.version} is downloading...`;
+  const updateBtn = document.getElementById('updateBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const progress = document.getElementById('updateProgress');
+  
+  message.textContent = `Version ${info.version} is available!`;
+  updateBtn.style.display = '';
+  updateBtn.disabled = false;
+  restartBtn.style.display = 'none';
+  progress.classList.remove('visible');
   banner.classList.add('visible');
-  document.getElementById('updateBtn').style.display = 'none';
+  banner.dataset.downloadUrl = info.downloadUrl || '';
 });
 
-ipcRenderer.on(IPC.UPDATE_DOWNLOADED, (event, info) => {
-  const banner = document.getElementById('updateBanner');
+ipcRenderer.on(IPC.UPDATE_PROGRESS, (event, percent) => {
+  const progress = document.getElementById('updateProgress');
+  const progressBar = document.getElementById('updateProgressBar');
   const message = document.getElementById('updateMessage');
-  const btn = document.getElementById('updateBtn');
-  message.textContent = `Version ${info.version} is ready to install!`;
-  btn.style.display = '';
-  banner.classList.add('visible');
+  
+  progress.classList.add('visible');
+  progressBar.style.width = percent + '%';
+  message.textContent = `Downloading update... ${percent}%`;
 });
+
+ipcRenderer.on(IPC.UPDATE_DOWNLOADED, () => {
+  const message = document.getElementById('updateMessage');
+  const updateBtn = document.getElementById('updateBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const progress = document.getElementById('updateProgress');
+  
+  message.textContent = 'Update ready! Restart to apply.';
+  updateBtn.style.display = 'none';
+  restartBtn.style.display = '';
+  progress.classList.remove('visible');
+});
+
+let downloadedUpdatePath = null;
 
 function setupUpdateBanner() {
   const banner = document.getElementById('updateBanner');
-  const btn = document.getElementById('updateBtn');
+  const updateBtn = document.getElementById('updateBtn');
+  const restartBtn = document.getElementById('restartBtn');
   const dismiss = document.getElementById('updateDismiss');
   
-  btn.addEventListener('click', () => {
-    ipcRenderer.send(IPC.INSTALL_UPDATE);
+  updateBtn.addEventListener('click', async () => {
+    updateBtn.disabled = true;
+    updateBtn.textContent = 'Downloading...';
+    const result = await ipcRenderer.invoke(IPC.DOWNLOAD_UPDATE);
+    if (result.success) {
+      downloadedUpdatePath = result.path;
+    } else {
+      document.getElementById('updateMessage').textContent = 'Download failed. Try again.';
+      updateBtn.disabled = false;
+      updateBtn.textContent = 'Update Now';
+    }
+  });
+  
+  restartBtn.addEventListener('click', () => {
+    if (downloadedUpdatePath) {
+      ipcRenderer.send(IPC.INSTALL_UPDATE, downloadedUpdatePath);
+    }
   });
   
   dismiss.addEventListener('click', () => {

@@ -9,6 +9,7 @@ let activeScriptureLayer = 0;
 let activeQuickSlideLayer = 0;
 let videoUpdateInterval = null;
 let audioUpdateInterval = null;
+let countdownInterval = null;
 let defaultStandbyPath = null;
 
 function parseBodyForLists(text) {
@@ -121,6 +122,13 @@ function showView(viewName) {
   
   if (currentState === 'audio' && viewName !== 'audio') {
     stopAudio();
+  }
+  
+  if (currentState === 'quickSlide' && viewName !== 'quickSlide') {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
   }
   
   const view = document.getElementById(viewName + 'View');
@@ -474,10 +482,63 @@ ipcRenderer.on(IPC.SHOW_QUICK_SLIDE, (event, slide) => {
       if (el.type === 'title') div.classList.add('el-title');
       div.style.fontFamily = fontFamily + ', serif';
       div.style.fontSize = (el.type === 'title' ? titleFontSize : fontSize) + 'px';
-      div.style.color = fontColor;
+      div.style.color = el.fontColor || fontColor;
+      const ox = el.offsetX || 0;
+      const oy = el.offsetY || 0;
+      const baseX = el.horizontalAlign === 'center' ? -50 : 0;
+      const baseY = el.verticalAlign === 'center' ? -50 : 0;
+      div.style.transform = `translate(calc(${baseX}% + ${ox}%), calc(${baseY}% + ${oy}%))`;
       div.innerHTML = el.type === 'title' ? escapeHtml(el.text) : parseBodyForLists(el.text);
       nextCustom.appendChild(div);
     });
+  } else if (slide.preset === 'countdown') {
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+    
+    nextTitle.style.display = 'none';
+    nextBody.style.display = 'none';
+    nextCustom.classList.add('active');
+    nextCustom.innerHTML = '';
+    
+    nextLayer.style.justifyContent = 'center';
+    nextLayer.style.alignItems = 'center';
+    nextLayer.style.textAlign = 'center';
+    
+    if (slide.countdownLabel) {
+      const labelDiv = document.createElement('div');
+      labelDiv.className = 'countdown-label';
+      labelDiv.style.fontFamily = fontFamily + ', serif';
+      labelDiv.style.fontSize = fontSize + 'px';
+      labelDiv.style.color = fontColor;
+      labelDiv.textContent = slide.countdownLabel;
+      nextCustom.appendChild(labelDiv);
+    }
+    
+    const timerDiv = document.createElement('div');
+    timerDiv.className = 'countdown-timer';
+    timerDiv.style.fontFamily = fontFamily + ', serif';
+    timerDiv.style.fontSize = (titleFontSize * 1.5) + 'px';
+    timerDiv.style.color = fontColor;
+    nextCustom.appendChild(timerDiv);
+    
+    const updateCountdown = () => {
+      const now = Date.now();
+      const remaining = Math.max(0, (slide.endTime || now) - now);
+      const totalSec = Math.floor(remaining / 1000);
+      const mins = Math.floor(totalSec / 60);
+      const secs = totalSec % 60;
+      timerDiv.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+      
+      if (remaining <= 0 && countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+    };
+    
+    updateCountdown();
+    countdownInterval = setInterval(updateCountdown, 1000);
   } else {
     nextTitle.style.display = '';
     nextBody.style.display = '';

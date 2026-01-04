@@ -8,7 +8,11 @@
 <body>
   <div class="update-banner" id="updateBanner">
     <span class="update-message" id="updateMessage">A new version is available!</span>
-    <button class="update-btn" id="updateBtn">Restart to Update</button>
+    <div class="update-progress" id="updateProgress">
+      <div class="update-progress-bar" id="updateProgressBar"></div>
+    </div>
+    <button class="update-btn" id="updateBtn">Update Now</button>
+    <button class="update-btn" id="restartBtn" style="display:none;">Restart Now</button>
     <button class="update-dismiss" id="updateDismiss">×</button>
   </div>
   <div class="app-container">
@@ -32,6 +36,7 @@
       </ul>
       <div class="sidebar-footer">
         <button class="standby-btn" id="standbyBtn">STANDBY</button>
+        <div class="version-info" id="versionInfo">v0.0.0</div>
       </div>
     </nav>
     
@@ -199,6 +204,7 @@
                   <button class="qs-preset-btn" data-preset="welcome">Welcome</button>
                   <button class="qs-preset-btn" data-preset="prayer">Prayer Request</button>
                   <button class="qs-preset-btn" data-preset="lyrics">Song Lyrics</button>
+                  <button class="qs-preset-btn" data-preset="countdown">Countdown</button>
                   <button class="qs-preset-btn" data-preset="custom">Custom</button>
                 </div>
               </div>
@@ -223,6 +229,19 @@
                   </div>
                   <div class="qs-elements-list" id="qsElementsList"></div>
                   <div class="qs-elements-hint" id="qsElementsHint">Add elements or leave empty for background-only slide</div>
+                </div>
+              </div>
+              <div class="qs-row" id="qsCountdownLabelRow" style="display: none;">
+                <label for="qsCountdownLabel">Label</label>
+                <input type="text" id="qsCountdownLabel" class="text-input" placeholder="e.g. Service begins in...">
+              </div>
+              <div class="qs-row" id="qsCountdownDurationRow" style="display: none;">
+                <label>Duration</label>
+                <div class="qs-duration-inputs">
+                  <input type="number" id="qsCountdownMin" class="qs-duration-input" min="0" max="120" value="5">
+                  <span class="qs-duration-label">min</span>
+                  <input type="number" id="qsCountdownSec" class="qs-duration-input" min="0" max="59" value="0">
+                  <span class="qs-duration-label">sec</span>
                 </div>
               </div>
               <div class="qs-row qs-style-row">
@@ -283,6 +302,8 @@
                     <select id="qsBgImageSelect" class="select-input">
                       <option value="">-- Select --</option>
                     </select>
+                    <button class="btn btn-small" id="qsBgBrowseBtn">Browse...</button>
+                    <span class="qs-custom-bg-label" id="qsCustomBgLabel"></span>
                   </div>
                 </div>
               </div>
@@ -299,7 +320,8 @@
                 </div>
               </div>
               <div class="qs-actions">
-                <button class="btn btn-large" id="qsSaveBtn">Save Slide</button>
+                <button class="btn btn-large" id="qsStageBtn">Stage</button>
+                <button class="btn btn-large btn-primary" id="qsSaveBtn">Save Slide</button>
               </div>
             </div>
           </div>

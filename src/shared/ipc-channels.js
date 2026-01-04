@@ -54,9 +54,13 @@ const IPC_CHANNELS = {
   SHOW_QUICK_SLIDE: 'show-quick-slide',
   GET_DEFAULT_QUICKSLIDE_BACKGROUNDS: 'get-default-quickslide-backgrounds',
   UPDATE_AVAILABLE: 'update-available',
+  UPDATE_CHECKING: 'update-checking',
+  UPDATE_PROGRESS: 'update-progress',
   UPDATE_DOWNLOADED: 'update-downloaded',
+  DOWNLOAD_UPDATE: 'download-update',
   INSTALL_UPDATE: 'install-update',
-  CHECK_FOR_UPDATES: 'check-for-updates'
+  CHECK_FOR_UPDATES: 'check-for-updates',
+  GET_APP_VERSION: 'get-app-version'
 };
 
 if (typeof module !== 'undefined') {
