@@ -11,6 +11,7 @@ let controlWindow;
 let presentationWindow;
 let settings;
 let defaultStandbyPath;
+let mediaDir;
 
 function getDefaultStandbyPath() {
   return path.join(__dirname, 'assets', 'defaults', 'default-standby.png');
@@ -32,6 +33,13 @@ function getDefaultQuickSlideBackgrounds() {
     { id: 'scripture-bg-bible', name: 'Open Bible', path: path.join(defaultsDir, 'scripture-bg-bible.jpg') },
     { id: 'scripture-bg-church', name: 'Church Silhouette', path: path.join(defaultsDir, 'scripture-bg-church.jpg') }
   ].filter(bg => fs.existsSync(bg.path));
+}
+
+function initMediaDir(userDataPath) {
+  mediaDir = path.join(userDataPath, 'media');
+  if (!fs.existsSync(mediaDir)) {
+    fs.mkdirSync(mediaDir, { recursive: true });
+  }
 }
 
 function getEffectiveStandbyPath() {
@@ -58,8 +66,9 @@ function validateAllPaths() {
   }
   
   settings.mediaLibrary.forEach((item, index) => {
-    if (!validatePath(item.path)) {
-      brokenItems.push({ type: 'library', path: item.path, index });
+    const effectivePath = item.internalPath || item.originalPath || item.path;
+    if (!validatePath(effectivePath)) {
+      brokenItems.push({ type: 'library', path: effectivePath, index });
     }
   });
   
@@ -491,7 +500,7 @@ function setupIPC() {
     }
   });
 
-  ipcMain.on(IPC.SHOW_VIDEO, (event, videoPath, startTime) => {
+  ipcMain.on(IPC.SHOW_VIDEO, (event, videoPath, startTime, autoPlay) => {
     if (!fs.existsSync(videoPath)) {
       if (controlWindow) {
         controlWindow.webContents.send(IPC.VIDEO_ERROR, videoPath);
@@ -499,7 +508,7 @@ function setupIPC() {
       return;
     }
     if (presentationWindow) {
-      presentationWindow.webContents.send(IPC.SHOW_VIDEO, videoPath, startTime);
+      presentationWindow.webContents.send(IPC.SHOW_VIDEO, videoPath, startTime, autoPlay);
     }
   });
 
@@ -591,21 +600,44 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.ADD_TO_LIBRARY, (event, files) => {
-    const existing = new Set(settings.mediaLibrary.map(f => f.path));
-    const newFiles = files.filter(f => !existing.has(f.path));
+    const existing = new Set(settings.mediaLibrary.map(f => f.originalPath || f.path));
+    const newFiles = files.filter(f => !existing.has(f.originalPath || f.path));
     settings.mediaLibrary = [...settings.mediaLibrary, ...newFiles];
     saveSettings(settings);
     return settings.mediaLibrary;
   });
 
-  ipcMain.handle(IPC.REMOVE_FROM_LIBRARY, (event, filePath) => {
-    settings.mediaLibrary = settings.mediaLibrary.filter(f => f.path !== filePath);
+  ipcMain.handle(IPC.REMOVE_FROM_LIBRARY, (event, itemIdOrPath) => {
+    const item = settings.mediaLibrary.find(f => f.id === itemIdOrPath || f.path === itemIdOrPath);
+    
+    if (item) {
+      if (item.internalPath && fs.existsSync(item.internalPath)) {
+        try {
+          fs.unlinkSync(item.internalPath);
+        } catch (err) {
+          console.error('Error deleting internal media:', err);
+        }
+      }
+      
+      if (item.id) {
+        const thumbnailPath = path.join(app.getPath('userData'), 'thumbnails', `${item.id}.jpg`);
+        if (fs.existsSync(thumbnailPath)) {
+          try {
+            fs.unlinkSync(thumbnailPath);
+          } catch (err) {
+            console.error('Error deleting thumbnail:', err);
+          }
+        }
+      }
+    }
+    
+    settings.mediaLibrary = settings.mediaLibrary.filter(f => f.id !== itemIdOrPath && f.path !== itemIdOrPath);
     saveSettings(settings);
     return settings.mediaLibrary;
   });
 
-  ipcMain.handle(IPC.UPDATE_LIBRARY_ITEM, (event, filePath, updates) => {
-    const item = settings.mediaLibrary.find(f => f.path === filePath);
+  ipcMain.handle(IPC.UPDATE_LIBRARY_ITEM, (event, itemId, updates) => {
+    const item = settings.mediaLibrary.find(f => f.id === itemId || f.path === itemId);
     if (item) {
       Object.assign(item, updates);
       saveSettings(settings);
@@ -701,14 +733,13 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle(IPC.SAVE_THUMBNAIL, async (event, videoPath, dataUrl) => {
+  ipcMain.handle(IPC.SAVE_THUMBNAIL, async (event, mediaId, dataUrl) => {
     try {
       const thumbnailDir = path.join(app.getPath('userData'), 'thumbnails');
       if (!fs.existsSync(thumbnailDir)) {
         fs.mkdirSync(thumbnailDir, { recursive: true });
       }
-      const hash = Buffer.from(videoPath).toString('base64').replace(/[/+=]/g, '_').substring(0, 32);
-      const thumbnailPath = path.join(thumbnailDir, `${hash}.jpg`);
+      const thumbnailPath = path.join(thumbnailDir, `${mediaId}.jpg`);
       const base64Data = dataUrl.replace(/^data:image\/\w+;base64,/, '');
       fs.writeFileSync(thumbnailPath, base64Data, 'base64');
       return thumbnailPath;
@@ -718,17 +749,71 @@ function setupIPC() {
     }
   });
 
-  ipcMain.handle(IPC.GET_THUMBNAIL, async (event, videoPath) => {
+  ipcMain.handle(IPC.GET_THUMBNAIL, async (event, mediaId) => {
     try {
       const thumbnailDir = path.join(app.getPath('userData'), 'thumbnails');
-      const hash = Buffer.from(videoPath).toString('base64').replace(/[/+=]/g, '_').substring(0, 32);
-      const thumbnailPath = path.join(thumbnailDir, `${hash}.jpg`);
+      const thumbnailPath = path.join(thumbnailDir, `${mediaId}.jpg`);
       if (fs.existsSync(thumbnailPath)) {
         return thumbnailPath;
       }
       return null;
     } catch (err) {
       return null;
+    }
+  });
+
+  ipcMain.handle(IPC.COPY_MEDIA_FILE, async (event, { id, sourcePath }) => {
+    try {
+      if (!fs.existsSync(sourcePath)) {
+        return { success: false, error: 'Source file not found' };
+      }
+      const ext = path.extname(sourcePath);
+      const destPath = path.join(mediaDir, `${id}${ext}`);
+      const fileSize = fs.statSync(sourcePath).size;
+      const readStream = fs.createReadStream(sourcePath);
+      const writeStream = fs.createWriteStream(destPath);
+      let copiedBytes = 0;
+      readStream.on('data', (chunk) => {
+        copiedBytes += chunk.length;
+        const progress = Math.round((copiedBytes / fileSize) * 100);
+        if (controlWindow) {
+          controlWindow.webContents.send(IPC.MEDIA_COPY_PROGRESS, { id, progress });
+        }
+      });
+      return new Promise((resolve) => {
+        writeStream.on('finish', () => {
+          if (controlWindow) {
+            controlWindow.webContents.send(IPC.MEDIA_COPY_COMPLETE, { id, success: true, internalPath: destPath });
+          }
+          resolve({ success: true, internalPath: destPath });
+        });
+        writeStream.on('error', (err) => {
+          if (controlWindow) {
+            controlWindow.webContents.send(IPC.MEDIA_COPY_COMPLETE, { id, success: false, error: err.message });
+          }
+          resolve({ success: false, error: err.message });
+        });
+        readStream.pipe(writeStream);
+      });
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  });
+
+  ipcMain.handle(IPC.GET_MEDIA_STORAGE_SIZE, async () => {
+    try {
+      let totalSize = 0;
+      const files = fs.readdirSync(mediaDir);
+      for (const file of files) {
+        const filePath = path.join(mediaDir, file);
+        const stats = fs.statSync(filePath);
+        if (stats.isFile()) {
+          totalSize += stats.size;
+        }
+      }
+      return { success: true, size: totalSize };
+    } catch (err) {
+      return { success: false, error: err.message, size: 0 };
     }
   });
 
@@ -761,8 +846,11 @@ function setupIPC() {
   });
 
   ipcMain.handle(IPC.RELOCATE_LIBRARY_ITEM, async (event, oldPath, newPath) => {
-    const item = settings.mediaLibrary.find(f => f.path === oldPath);
+    const item = settings.mediaLibrary.find(f => f.path === oldPath || f.originalPath === oldPath);
     if (item && fs.existsSync(newPath)) {
+      if (item.originalPath) {
+        item.originalPath = newPath;
+      }
       item.path = newPath;
       settings.slideshowPresets.forEach(preset => {
         preset.images.forEach(img => {
@@ -1170,6 +1258,7 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
   defaultStandbyPath = getDefaultStandbyPath();
   initSettings(app.getPath('userData'));
+  initMediaDir(app.getPath('userData'));
   settings = loadSettings();
   createWindows();
   setupIPC();

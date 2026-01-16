@@ -105,6 +105,31 @@ body {
 
 .video-view {
   background: #000;
+  opacity: 0;
+  transition: opacity 0.5s ease-in-out;
+  z-index: 1;
+}
+
+.video-view.active {
+  opacity: 1;
+  z-index: 10;
+}
+
+.video-view.fading-out {
+  opacity: 0;
+  z-index: 10;
+}
+
+.image-view {
+  z-index: 5;
+}
+
+.image-view.above-video {
+  z-index: 15;
+}
+
+.image-view.fading-out {
+  z-index: 1;
 }
 
 .video-view video {
@@ -399,6 +424,11 @@ body {
 }
 
 .countdown-timer {
+  font-weight: bold;
+  letter-spacing: 0.05em;
+}
+
+.quick-slide-custom-el.el-countdown {
   font-weight: bold;
   letter-spacing: 0.05em;
 }

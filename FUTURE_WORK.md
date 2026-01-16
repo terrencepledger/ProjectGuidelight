@@ -55,6 +55,9 @@ Support for non-English translations and multilingual displays.
 
 ## Phase 4: Operator Experience
 
+### UI Standards & Responsiveness Review
+Re-examine the UI in each pane for best standards, resizing behavior, and ease of access. Ensure consistent spacing, alignment, and accessibility across all panels and window sizes.
+
 ### Keyboard Shortcuts & Quick-Switch Presets
 Hotkeys or large dedicated buttons for common service segments. Reduce clicks during live services.
 

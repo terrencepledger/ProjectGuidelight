@@ -60,7 +60,11 @@ const IPC_CHANNELS = {
   DOWNLOAD_UPDATE: 'download-update',
   INSTALL_UPDATE: 'install-update',
   CHECK_FOR_UPDATES: 'check-for-updates',
-  GET_APP_VERSION: 'get-app-version'
+  GET_APP_VERSION: 'get-app-version',
+  COPY_MEDIA_FILE: 'copy-media-file',
+  MEDIA_COPY_PROGRESS: 'media-copy-progress',
+  MEDIA_COPY_COMPLETE: 'media-copy-complete',
+  GET_MEDIA_STORAGE_SIZE: 'get-media-storage-size'
 };
 
 if (typeof module !== 'undefined') {

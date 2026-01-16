@@ -110,13 +110,11 @@ function stopAudio() {
   }
 }
 
-function showView(viewName) {
+function showView(viewName, keepVideoActive) {
   const views = document.querySelectorAll('.standby-view, .image-view, .video-view, .audio-view, .scripture-view, .quick-slide-view');
-  views.forEach(view => {
-    view.classList.remove('active');
-  });
+  const previousState = currentState;
   
-  if (currentState === 'video' && viewName !== 'video') {
+  if (currentState === 'video' && viewName !== 'video' && !keepVideoActive) {
     stopVideo();
   }
   
@@ -136,6 +134,17 @@ function showView(viewName) {
     view.classList.add('active');
   }
   currentState = viewName;
+  
+  if (!keepVideoActive) {
+    setTimeout(() => {
+      views.forEach(v => {
+        if (v.id !== viewName + 'View') {
+          v.classList.remove('active');
+          v.classList.remove('fading-out');
+        }
+      });
+    }, 500);
+  }
 }
 
 function sendVideoState() {
@@ -179,6 +188,13 @@ ipcRenderer.on(IPC.SHOW_IMAGE, (event, imagePath) => {
   
   const currentLayer = layers[activeSlideLayer];
   const nextLayer = layers[1 - activeSlideLayer];
+  const wasVideo = currentState === 'video';
+  const imageView = document.getElementById('imageView');
+  const videoView = document.getElementById('videoView');
+  
+  if (wasVideo) {
+    imageView.classList.add('above-video');
+  }
   
   const doTransition = () => {
     layers.forEach(layer => {
@@ -198,16 +214,32 @@ ipcRenderer.on(IPC.SHOW_IMAGE, (event, imagePath) => {
     nextLayer.classList.add('visible');
     
     activeSlideLayer = 1 - activeSlideLayer;
+    
+    if (wasVideo) {
+      videoView.classList.add('fading-out');
+      setTimeout(() => {
+        videoView.classList.remove('active', 'fading-out');
+        imageView.classList.remove('above-video');
+        stopVideo();
+      }, 500);
+    }
   };
   
   nextLayer.onload = doTransition;
   nextLayer.src = 'file://' + imagePath;
   
-  showView('image');
+  showView('image', wasVideo);
 });
 
-ipcRenderer.on(IPC.SHOW_VIDEO, (event, videoPath, startTime) => {
+ipcRenderer.on(IPC.SHOW_VIDEO, (event, videoPath, startTime, autoPlay = true) => {
   const video = document.getElementById('displayVideo');
+  const videoView = document.getElementById('videoView');
+  const wasImage = currentState === 'image';
+  
+  if (wasImage) {
+    videoView.style.opacity = '0';
+    videoView.classList.add('active');
+  }
   
   video.src = 'file://' + videoPath;
   video.currentTime = startTime || 0;
@@ -216,8 +248,17 @@ ipcRenderer.on(IPC.SHOW_VIDEO, (event, videoPath, startTime) => {
     if (startTime) {
       video.currentTime = startTime;
     }
-    video.play();
+    if (autoPlay) {
+      video.play();
+    }
     sendVideoState();
+    
+    if (wasImage) {
+      videoView.style.opacity = '';
+      setTimeout(() => {
+        document.getElementById('imageView').classList.remove('active');
+      }, 500);
+    }
   };
   
   video.onplay = sendVideoState;
@@ -231,7 +272,11 @@ ipcRenderer.on(IPC.SHOW_VIDEO, (event, videoPath, startTime) => {
     }
   };
   
-  showView('video');
+  if (!wasImage) {
+    showView('video');
+  } else {
+    currentState = 'video';
+  }
 });
 
 ipcRenderer.on(IPC.CONTROL_VIDEO, (event, command, value) => {
@@ -476,21 +521,50 @@ ipcRenderer.on(IPC.SHOW_QUICK_SLIDE, (event, slide) => {
     
     nextCustom.innerHTML = '';
     
+    if (countdownInterval) {
+      clearInterval(countdownInterval);
+      countdownInterval = null;
+    }
+    
+    const countdownDivs = [];
+    
     slide.elements.forEach(el => {
       const div = document.createElement('div');
       div.className = `quick-slide-custom-el v-${el.verticalAlign} h-${el.horizontalAlign} w-${el.textWidth}`;
       if (el.type === 'title') div.classList.add('el-title');
-      div.style.fontFamily = fontFamily + ', serif';
-      div.style.fontSize = (el.type === 'title' ? titleFontSize : fontSize) + 'px';
+      if (el.type === 'countdown') div.classList.add('el-countdown');
+      div.style.fontFamily = (el.fontFamily || fontFamily) + ', serif';
+      div.style.fontSize = (el.type === 'title' || el.type === 'countdown' ? titleFontSize : fontSize) + 'px';
       div.style.color = el.fontColor || fontColor;
       const ox = el.offsetX || 0;
       const oy = el.offsetY || 0;
       const baseX = el.horizontalAlign === 'center' ? -50 : 0;
       const baseY = el.verticalAlign === 'center' ? -50 : 0;
       div.style.transform = `translate(calc(${baseX}% + ${ox}%), calc(${baseY}% + ${oy}%))`;
-      div.innerHTML = el.type === 'title' ? escapeHtml(el.text) : parseBodyForLists(el.text);
+      if (el.type === 'countdown') {
+        countdownDivs.push({ div, endTime: el.endTime });
+      } else if (el.type === 'title') {
+        div.innerHTML = escapeHtml(el.text);
+      } else {
+        div.innerHTML = parseBodyForLists(el.text);
+      }
       nextCustom.appendChild(div);
     });
+    
+    if (countdownDivs.length > 0) {
+      const updateCountdowns = () => {
+        const now = Date.now();
+        countdownDivs.forEach(({ div, endTime }) => {
+          const remaining = Math.max(0, (endTime || now) - now);
+          const totalSec = Math.floor(remaining / 1000);
+          const mins = Math.floor(totalSec / 60);
+          const secs = totalSec % 60;
+          div.textContent = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
+        });
+      };
+      updateCountdowns();
+      countdownInterval = setInterval(updateCountdowns, 1000);
+    }
   } else if (slide.preset === 'countdown') {
     if (countdownInterval) {
       clearInterval(countdownInterval);
@@ -502,25 +576,43 @@ ipcRenderer.on(IPC.SHOW_QUICK_SLIDE, (event, slide) => {
     nextCustom.classList.add('active');
     nextCustom.innerHTML = '';
     
-    nextLayer.style.justifyContent = 'center';
-    nextLayer.style.alignItems = 'center';
-    nextLayer.style.textAlign = 'center';
+    nextLayer.style.justifyContent = '';
+    nextLayer.style.alignItems = '';
+    nextLayer.style.textAlign = '';
+    
+    const labelVAlign = slide.labelVerticalAlign || 'center';
+    const labelHAlign = slide.labelHorizontalAlign || 'center';
+    const labelWidth = slide.labelTextWidth || 'wide';
+    const labelOffsetX = slide.labelOffsetX || 0;
+    const labelOffsetY = slide.labelOffsetY !== undefined ? slide.labelOffsetY : -30;
+    
+    const timerVAlign = slide.timerVerticalAlign || 'center';
+    const timerHAlign = slide.timerHorizontalAlign || 'center';
+    const timerWidth = slide.timerTextWidth || 'wide';
+    const timerOffsetX = slide.timerOffsetX || 0;
+    const timerOffsetY = slide.timerOffsetY !== undefined ? slide.timerOffsetY : 30;
     
     if (slide.countdownLabel) {
       const labelDiv = document.createElement('div');
-      labelDiv.className = 'countdown-label';
+      labelDiv.className = `quick-slide-custom-el v-${labelVAlign} h-${labelHAlign} w-${labelWidth}`;
       labelDiv.style.fontFamily = fontFamily + ', serif';
       labelDiv.style.fontSize = fontSize + 'px';
       labelDiv.style.color = fontColor;
+      const lbaseX = labelHAlign === 'center' ? -50 : 0;
+      const lbaseY = labelVAlign === 'center' ? -50 : 0;
+      labelDiv.style.transform = `translate(calc(${lbaseX}% + ${labelOffsetX}%), calc(${lbaseY}% + ${labelOffsetY}%))`;
       labelDiv.textContent = slide.countdownLabel;
       nextCustom.appendChild(labelDiv);
     }
     
     const timerDiv = document.createElement('div');
-    timerDiv.className = 'countdown-timer';
+    timerDiv.className = `quick-slide-custom-el el-countdown v-${timerVAlign} h-${timerHAlign} w-${timerWidth}`;
     timerDiv.style.fontFamily = fontFamily + ', serif';
     timerDiv.style.fontSize = (titleFontSize * 1.5) + 'px';
     timerDiv.style.color = fontColor;
+    const tbaseX = timerHAlign === 'center' ? -50 : 0;
+    const tbaseY = timerVAlign === 'center' ? -50 : 0;
+    timerDiv.style.transform = `translate(calc(${tbaseX}% + ${timerOffsetX}%), calc(${tbaseY}% + ${timerOffsetY}%))`;
     nextCustom.appendChild(timerDiv);
     
     const updateCountdown = () => {
