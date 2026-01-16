@@ -88,6 +88,15 @@ Allow audio to play simultaneously with other visual content:
 - Visual indicator showing audio is playing behind current content
 - Fade/crossfade between audio tracks
 
+### Audio as Slideshow Queue Item
+Allow audio files to be added directly to slideshow queues as playable items:
+
+- Drag audio from media library into slideshow queue
+- Audio plays as a "slide" with visual placeholder (waveform, album art, or custom background)
+- Transport controls for audio slides (play/pause, scrub, skip)
+- Configurable behavior: auto-advance when audio ends or wait for manual advance
+- Useful for hymns, announcements, or sermon clips within a slideshow sequence
+
 ---
 
 ## Phase 5: Service Planning
@@ -99,6 +108,19 @@ Ordered run-of-show with cued content segments.
 - Mix content types: slideshow → scripture → video → slideshow
 - Pre-load entire service in advance
 - One-click advance through planned segments
+
+---
+
+## Phase 6: App Maintenance & Updates
+
+### Patch Notes UI
+Display release notes after successful in-app updates:
+
+- Show "What's New" dialog after update completes
+- List new features, fixes, and improvements
+- Link to full changelog if available
+- Option to "Don't show again" for minor updates
+- Accessible from Help menu for review anytime
 
 ---
 
