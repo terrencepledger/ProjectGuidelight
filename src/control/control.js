@@ -230,7 +230,7 @@ function createQuickSlide({ id, preset, title, body, background, backgroundImage
   };
 }
 
-function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWidth, offsetX, offsetY, fontColor, fontFamily, durationMinutes, durationSeconds }) {
+function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWidth, offsetX, offsetY, fontColor, fontFamily, fontSize, durationMinutes, durationSeconds }) {
   return {
     type: type || 'body',
     text: text || '',
@@ -241,6 +241,7 @@ function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWi
     offsetY: offsetY || 0,
     fontColor: fontColor || null,
     fontFamily: fontFamily || null,
+    fontSize: fontSize || null,
     durationMinutes: durationMinutes !== undefined ? durationMinutes : 5,
     durationSeconds: durationSeconds !== undefined ? durationSeconds : 0
   };
@@ -317,11 +318,34 @@ async function getVerseWithCache(bibleId, bookId, chapter, verse, bibleId2) {
   return null;
 }
 
+let previewScale = 0.2;
+let formPreviewScale = 0.18;
+
+function setPreviewAspectRatio() {
+  const ratio = displayResolution.width / displayResolution.height;
+  document.documentElement.style.setProperty('--monitor-aspect-ratio', ratio);
+}
+
+function updatePreviewScale() {
+  const previewContent = document.getElementById('previewContent');
+  if (!previewContent) return;
+  const containerHeight = previewContent.clientHeight - 12;
+  previewScale = containerHeight / displayResolution.height;
+}
+
+function updateFormPreviewScale() {
+  const qsPreviewArea = document.getElementById('qsPreviewArea');
+  if (!qsPreviewArea || qsPreviewArea.clientHeight <= 32) return;
+  const containerHeight = qsPreviewArea.clientHeight - 32;
+  formPreviewScale = containerHeight / displayResolution.height;
+}
+
 async function init() {
   settings = await ipcRenderer.invoke(IPC.GET_SETTINGS);
   displays = await ipcRenderer.invoke(IPC.GET_DISPLAYS);
   mediaLibrary = await ipcRenderer.invoke(IPC.GET_MEDIA_LIBRARY);
   displayResolution = await ipcRenderer.invoke(IPC.GET_DISPLAY_RESOLUTION);
+  setPreviewAspectRatio();
   slideshowPresets = await ipcRenderer.invoke(IPC.GET_SLIDESHOW_PRESETS);
   quickSlides = await ipcRenderer.invoke(IPC.GET_QUICK_SLIDES);
   
@@ -353,6 +377,7 @@ async function init() {
   setupContextMenu();
   setupBlackoutMode();
   setupUpdateBanner();
+  setupCheckUpdatesButton();
   setupMediaCopyListeners();
   await migrateLegacyMedia();
   renderImageGrid();
@@ -360,6 +385,15 @@ async function init() {
   updateStorageDisplay();
   updateLiveDisplay();
   loadActivePreset();
+  updatePreviewScale();
+  updateFormPreviewScale();
+  
+  window.addEventListener('resize', () => {
+    updatePreviewScale();
+    updateFormPreviewScale();
+    updatePreviewDisplay();
+    updateLiveDisplay();
+  });
 }
 
 async function validateBrokenPaths() {
@@ -463,13 +497,9 @@ function setupSettingsControls() {
     }
   });
 
-  const fontSizeSlider = document.getElementById('scriptureFontSize');
-  const fontSizeValue = document.getElementById('fontSizeValue');
-  fontSizeSlider.addEventListener('input', () => {
-    fontSizeValue.textContent = fontSizeSlider.value;
-  });
-  fontSizeSlider.addEventListener('change', async () => {
-    settings.scriptureFontSize = parseInt(fontSizeSlider.value, 10);
+  const fontSizeSelect = document.getElementById('scriptureFontSize');
+  fontSizeSelect.addEventListener('change', async () => {
+    settings.scriptureFontSize = parseInt(fontSizeSelect.value, 10);
     await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureFontSize: settings.scriptureFontSize });
     if (staged?.type === 'scripture') {
       updatePreviewDisplay();
@@ -478,10 +508,6 @@ function setupSettingsControls() {
   });
 
   const fontColorInput = document.getElementById('scriptureFontColor');
-  const fontColorPreview = document.getElementById('fontColorPreview');
-  fontColorInput.addEventListener('input', () => {
-    fontColorPreview.textContent = fontColorInput.value.toUpperCase();
-  });
   fontColorInput.addEventListener('change', async () => {
     settings.scriptureFontColor = fontColorInput.value;
     await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureFontColor: fontColorInput.value });
@@ -509,11 +535,10 @@ function setupSettingsControls() {
     }
   });
 
-  const bgTypeButtons = document.querySelectorAll('.bg-type-btn');
-  const bgColorGroup = document.querySelector('.bg-color-group');
-  const bgImageGroup = document.querySelector('.bg-image-group');
+  const bgTypeButtons = document.querySelectorAll('.scripture-bg-btn');
+  const bgColorGroup = document.getElementById('scriptureBgColorGroup');
+  const bgImageGroup = document.getElementById('scriptureBgImageGroup');
   const bgSelect = document.getElementById('scriptureBackgroundSelect');
-  const customBgRow = document.getElementById('customBgRow');
 
   let defaultScriptureBackgrounds = [];
 
@@ -539,7 +564,7 @@ function setupSettingsControls() {
     btn.addEventListener('click', async () => {
       bgTypeButtons.forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
-      const type = btn.dataset.type;
+      const type = btn.dataset.bgType;
       if (type === 'color') {
         bgColorGroup.style.display = '';
         bgImageGroup.style.display = 'none';
@@ -559,18 +584,27 @@ function setupSettingsControls() {
   bgSelect.addEventListener('change', async () => {
     const value = bgSelect.value;
     if (value === 'custom') {
-      customBgRow.style.display = 'flex';
+      const files = await ipcRenderer.invoke(IPC.PICK_FILE, [
+        { name: 'Images', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp'] }
+      ]);
+      if (files && files.length > 0) {
+        settings.scriptureBackgroundImage = files[0];
+        await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: files[0] });
+        if (staged?.type === 'scripture') {
+          updatePreviewDisplay();
+          updateGoLiveButton();
+        }
+      } else {
+        bgSelect.value = settings.scriptureBackgroundImage || '';
+      }
     } else if (value) {
-      customBgRow.style.display = 'none';
       settings.scriptureBackgroundImage = value;
       await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: value });
-      document.getElementById('scriptureBackgroundImagePath').value = '';
       if (staged?.type === 'scripture') {
         updatePreviewDisplay();
         updateGoLiveButton();
       }
     } else {
-      customBgRow.style.display = 'none';
       settings.scriptureBackgroundImage = null;
       await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: null });
       if (staged?.type === 'scripture') {
@@ -588,7 +622,6 @@ function setupSettingsControls() {
     if (files && files.length > 0) {
       settings.scriptureBackgroundImage = files[0];
       await ipcRenderer.invoke(IPC.SAVE_SETTINGS, { scriptureBackgroundImage: files[0] });
-      document.getElementById('scriptureBackgroundImagePath').value = path.basename(files[0]);
       if (staged?.type === 'scripture') {
         updatePreviewDisplay();
         updateGoLiveButton();
@@ -633,31 +666,23 @@ function updateSettingsUI() {
   const fontFamilySelect = document.getElementById('scriptureFontFamily');
   fontFamilySelect.value = settings.scriptureFontFamily || 'Georgia';
 
-  const fontSizeSlider = document.getElementById('scriptureFontSize');
-  const fontSizeValue = document.getElementById('fontSizeValue');
-  fontSizeSlider.value = settings.scriptureFontSize || 48;
-  fontSizeValue.textContent = fontSizeSlider.value;
+  const fontSizeSelect = document.getElementById('scriptureFontSize');
+  fontSizeSelect.value = settings.scriptureFontSize || 48;
 
   const fontColorInput = document.getElementById('scriptureFontColor');
-  const fontColorPreview = document.getElementById('fontColorPreview');
   fontColorInput.value = settings.scriptureFontColor || '#FFFFFF';
-  fontColorPreview.textContent = fontColorInput.value.toUpperCase();
 
   const bgColorInput = document.getElementById('scriptureBackground');
-  const bgColorPreview = document.getElementById('bgColorPreview');
   bgColorInput.value = settings.scriptureBackground || '#000000';
-  bgColorPreview.textContent = bgColorInput.value.toUpperCase();
 
-  const bgTypeButtons = document.querySelectorAll('.bg-type-btn');
-  const bgColorGroup = document.querySelector('.bg-color-group');
-  const bgImageGroup = document.querySelector('.bg-image-group');
+  const bgTypeButtons = document.querySelectorAll('.scripture-bg-btn');
+  const bgColorGroup = document.getElementById('scriptureBgColorGroup');
+  const bgImageGroup = document.getElementById('scriptureBgImageGroup');
   const bgSelect = document.getElementById('scriptureBackgroundSelect');
-  const customBgRow = document.getElementById('customBgRow');
-  const scriptureBgInput = document.getElementById('scriptureBackgroundImagePath');
 
   if (settings.scriptureBackgroundImage) {
     bgTypeButtons.forEach(b => b.classList.remove('active'));
-    document.querySelector('.bg-type-btn[data-type="image"]').classList.add('active');
+    document.querySelector('.scripture-bg-btn[data-bg-type="image"]').classList.add('active');
     bgColorGroup.style.display = 'none';
     bgImageGroup.style.display = '';
     
@@ -666,20 +691,15 @@ function updateSettingsUI() {
     );
     if (isDefault) {
       bgSelect.value = settings.scriptureBackgroundImage;
-      customBgRow.style.display = 'none';
     } else {
       bgSelect.value = 'custom';
-      customBgRow.style.display = 'flex';
-      scriptureBgInput.value = path.basename(settings.scriptureBackgroundImage);
     }
   } else {
     bgTypeButtons.forEach(b => b.classList.remove('active'));
-    document.querySelector('.bg-type-btn[data-type="color"]').classList.add('active');
+    document.querySelector('.scripture-bg-btn[data-bg-type="color"]').classList.add('active');
     bgColorGroup.style.display = '';
     bgImageGroup.style.display = 'none';
     bgSelect.value = '';
-    customBgRow.style.display = 'none';
-    scriptureBgInput.value = '';
   }
 
   const apiKeyInput = document.getElementById('bibleApiKey');
@@ -818,7 +838,7 @@ function updatePreviewDisplay() {
     const fontSize = settings.scriptureFontSize || 48;
     const fontColor = settings.scriptureFontColor || '#FFFFFF';
     
-    const previewFontSize = Math.round(fontSize * 0.3);
+    const previewFontSize = Math.round(fontSize * previewScale);
     const previewRefSize = Math.round(previewFontSize * 0.5);
     
     let bgStyle = bgImage 
@@ -830,7 +850,7 @@ function updatePreviewDisplay() {
     
     const compareHtml = staged.compareText ? 
       `<div class="scripture-compare-preview"><div class="scripture-text" style="${textStyle}">${staged.compareText}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div>` : '';
-    previewEl.innerHTML = `<div class="scripture-preview ${staged.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.version})</div></div>${compareHtml}</div>`;
+    previewEl.innerHTML = `<div class="preview-frame"><div class="scripture-preview ${staged.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.version})</div></div>${compareHtml}</div></div>`;
     cleanupPreviewVideo();
     cleanupPreviewAudio();
   } else if (staged.type === 'quick-slide') {
@@ -842,8 +862,8 @@ function updatePreviewDisplay() {
     const fontColor = staged.fontColor || '#FFFFFF';
     const backgroundDim = staged.backgroundDim !== undefined ? staged.backgroundDim : 0;
     
-    const previewFontSize = Math.round(fontSize * 0.3);
-    const previewTitleSize = Math.round(titleFontSize * 0.3);
+    const previewFontSize = Math.round(fontSize * previewScale);
+    const previewTitleSize = Math.round(titleFontSize * previewScale);
     
     let bgStyle = bgImage 
       ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
@@ -851,7 +871,8 @@ function updatePreviewDisplay() {
     
     if (staged.preset === 'custom' && staged.elements) {
       let elementsHtml = staged.elements.map(el => {
-        const elFontSize = el.type === 'title' ? previewTitleSize : previewFontSize;
+        const defaultSize = el.type === 'title' ? titleFontSize : fontSize;
+        const elFontSize = Math.round((el.fontSize || defaultSize) * previewScale);
         const elColor = el.fontColor || fontColor;
         const elFont = el.fontFamily || fontFamily;
         const ox = el.offsetX || 0;
@@ -862,7 +883,7 @@ function updatePreviewDisplay() {
         const fontWeight = el.type === 'title' ? 'font-weight: bold;' : '';
         return `<div class="qs-staged-el v-${el.verticalAlign} h-${el.horizontalAlign} w-${el.textWidth}" style="font-family: ${elFont}, serif; font-size: ${elFontSize}px; color: ${elColor}; ${fontWeight} ${transformStyle}">${el.text}</div>`;
       }).join('');
-      previewEl.innerHTML = `<div class="quick-slide-preview custom-mode" style="${bgStyle} --dim-opacity: ${backgroundDim / 100};">${elementsHtml}</div>`;
+      previewEl.innerHTML = `<div class="preview-frame"><div class="quick-slide-preview custom-mode" style="${bgStyle} --dim-opacity: ${backgroundDim / 100};">${elementsHtml}</div></div>`;
     } else if (staged.preset === 'countdown') {
       const labelVAlign = staged.labelVerticalAlign || 'center';
       const labelHAlign = staged.labelHorizontalAlign || 'center';
@@ -883,14 +904,14 @@ function updatePreviewDisplay() {
       const secs = staged.durationSeconds || 0;
       const timerDisplay = String(mins).padStart(2, '0') + ':' + String(secs).padStart(2, '0');
       const timerHtml = `<div class="qs-staged-el v-${timerVAlign} h-${timerHAlign}" style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize * 1.5}px; color: ${fontColor}; font-weight: bold; transform: translate(calc(${tbaseX}% + ${timerOx}%), calc(${tbaseY}% + ${timerOy}%));">${timerDisplay}</div>`;
-      previewEl.innerHTML = `<div class="quick-slide-preview custom-mode" style="${bgStyle}">${labelHtml}${timerHtml}</div>`;
+      previewEl.innerHTML = `<div class="preview-frame"><div class="quick-slide-preview custom-mode" style="${bgStyle}">${labelHtml}${timerHtml}</div></div>`;
     } else {
       const showTitle = staged.preset === 'announcement' || staged.preset === 'prayer';
       const titleHtml = showTitle && staged.title 
         ? `<div style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize}px; color: ${fontColor}; font-weight: bold; margin-bottom: 0.5rem;">${staged.title}</div>` 
         : '';
       const bodyHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${staged.body}</div>`;
-      previewEl.innerHTML = `<div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div>`;
+      previewEl.innerHTML = `<div class="preview-frame"><div class="quick-slide-preview" style="${bgStyle}">${titleHtml}${bodyHtml}</div></div>`;
     }
     cleanupPreviewVideo();
     cleanupPreviewAudio();
@@ -999,26 +1020,46 @@ function updateLiveDisplay() {
   } else if (imagePath) {
     liveEl.innerHTML = `<img src="file://${imagePath}" alt="Live">`;
   } else if (live.type === 'scripture') {
+    const bg = live.liveBackground || '#000000';
+    const bgImage = live.liveBackgroundImage ? live.liveBackgroundImage.replace(/\\/g, '/') : null;
+    const fontFamily = live.liveFontFamily || 'Georgia';
+    const fontSize = live.liveFontSize || 48;
+    const fontColor = live.liveFontColor || '#FFFFFF';
+
+    const previewFontSize = Math.round(fontSize * previewScale);
+    const previewRefSize = Math.round(previewFontSize * 0.5);
+
+    let bgStyle = bgImage
+      ? `background: url('file:///${bgImage}') center/cover no-repeat;`
+      : `background: ${bg};`;
+
+    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor};`;
+    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${previewRefSize}px; color: ${fontColor}; opacity: 0.7;`;
+
     const compareHtml = live.compareText ?
-      `<div class="scripture-compare-preview"><div class="scripture-text">${live.compareText}</div><div class="scripture-ref">${live.reference} (${live.compareVersion})</div></div>` : '';
-    liveEl.innerHTML = `<div class="scripture-preview ${live.compareText ? 'compare-mode' : ''}"><div class="scripture-main-preview"><div class="scripture-text">${live.text}</div><div class="scripture-ref">${live.reference} (${live.version})</div></div>${compareHtml}</div>`;
+      `<div class="scripture-compare-preview"><div class="scripture-text" style="${textStyle}">${live.compareText}</div><div class="scripture-ref" style="${refStyle}">${live.reference} (${live.compareVersion})</div></div>` : '';
+    liveEl.innerHTML = `<div class="preview-frame"><div class="scripture-preview ${live.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${live.text}</div><div class="scripture-ref" style="${refStyle}">${live.reference} (${live.version})</div></div>${compareHtml}</div></div>`;
   } else if (live.type === 'quick-slide') {
     const bg = live.background || '#000000';
     const bgImage = live.backgroundImage ? live.backgroundImage.replace(/\\/g, '/') : null;
     const fontFamily = live.fontFamily || 'Georgia';
+    const titleFontSize = live.titleFontSize || 60;
     const fontSize = live.fontSize || 48;
     const fontColor = live.fontColor || '#FFFFFF';
+    const backgroundDim = live.backgroundDim !== undefined ? live.backgroundDim : 0;
     
-    const previewFontSize = Math.round(fontSize * 0.3);
-    const previewTitleSize = Math.round(fontSize * 0.35);
+    const previewFontSize = Math.round(fontSize * previewScale);
+    const previewTitleSize = Math.round(titleFontSize * previewScale);
     
     let bgStyle = bgImage 
       ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
       : `background-color: ${bg};`;
     
     let contentHtml = '';
+    let isCustomMode = false;
     
     if (live.preset === 'countdown') {
+      isCustomMode = true;
       const labelVAlign = live.labelVerticalAlign || 'center';
       const labelHAlign = live.labelHorizontalAlign || 'center';
       const labelOx = live.labelOffsetX || 0;
@@ -1036,10 +1077,22 @@ function updateLiveDisplay() {
         : '';
       const timerHtml = `<div class="qs-staged-el v-${timerVAlign} h-${timerHAlign}" style="font-family: ${fontFamily}, serif; font-size: ${previewTitleSize * 1.5}px; color: ${fontColor}; font-weight: bold; transform: translate(calc(${tbaseX}% + ${timerOx}%), calc(${tbaseY}% + ${timerOy}%));">⏱</div>`;
       contentHtml = labelHtml + timerHtml;
-    } else if (live.preset === 'custom' && live.elements && live.elements.length > 0) {
-      const summaryText = live.elements.map(el => el.text || '').filter(t => t).join(' / ');
-      const truncated = summaryText.length > 40 ? summaryText.substring(0, 40) + '...' : summaryText;
-      contentHtml = `<div style="font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor}; white-space: pre-wrap;">${escapeHtml(truncated)}</div>`;
+    } else if (live.preset === 'custom' && live.elements) {
+      isCustomMode = true;
+      contentHtml = live.elements.map(el => {
+        const defaultSize = el.type === 'title' ? titleFontSize : fontSize;
+        const elFontSize = Math.round((el.fontSize || defaultSize) * previewScale);
+        const elColor = el.fontColor || fontColor;
+        const elFont = el.fontFamily || fontFamily;
+        const ox = el.offsetX || 0;
+        const oy = el.offsetY || 0;
+        const baseX = el.horizontalAlign === 'center' ? -50 : 0;
+        const baseY = el.verticalAlign === 'center' ? -50 : 0;
+        const transformStyle = `transform: translate(calc(${baseX}% + ${ox}%), calc(${baseY}% + ${oy}%));`;
+        const fontWeight = el.type === 'title' ? 'font-weight: bold;' : '';
+        const displayText = el.type === 'countdown' ? '⏱' : escapeHtml(el.text);
+        return `<div class="qs-staged-el v-${el.verticalAlign} h-${el.horizontalAlign} w-${el.textWidth}" style="font-family: ${elFont}, serif; font-size: ${elFontSize}px; color: ${elColor}; ${fontWeight} ${transformStyle}">${displayText}</div>`;
+      }).join('');
     } else {
       const showTitle = live.preset === 'announcement' || live.preset === 'prayer';
       const titleHtml = showTitle && live.title 
@@ -1049,8 +1102,8 @@ function updateLiveDisplay() {
       contentHtml = titleHtml + bodyHtml;
     }
     
-    const customModeClass = live.preset === 'countdown' ? ' custom-mode' : '';
-    liveEl.innerHTML = `<div class="quick-slide-preview${customModeClass}" style="${bgStyle}">${contentHtml}</div>`;
+    const customModeClass = isCustomMode ? ' custom-mode' : '';
+    liveEl.innerHTML = `<div class="preview-frame"><div class="quick-slide-preview${customModeClass}" style="${bgStyle} --dim-opacity: ${backgroundDim / 100};">${contentHtml}</div></div>`;
   }
   
   mediaNameEl.textContent = getMediaName(live);
@@ -3403,6 +3456,37 @@ async function updateStorageDisplay() {
   }
 }
 
+function setupCheckUpdatesButton() {
+  const checkBtn = document.getElementById('checkUpdatesBtn');
+  const statusEl = document.getElementById('updateCheckStatus');
+  
+  checkBtn.addEventListener('click', async () => {
+    checkBtn.textContent = 'Checking...';
+    checkBtn.disabled = true;
+    statusEl.textContent = '';
+    statusEl.className = 'update-check-status';
+    
+    try {
+      const result = await ipcRenderer.invoke(IPC.CHECK_FOR_UPDATES);
+      if (result.updateAvailable) {
+        statusEl.textContent = '';
+      } else {
+        statusEl.textContent = '✓ You\'re up to date';
+        statusEl.classList.add('success');
+        setTimeout(() => {
+          statusEl.textContent = '';
+        }, 5000);
+      }
+    } catch (err) {
+      statusEl.textContent = 'Could not check for updates';
+      statusEl.classList.add('error');
+    }
+    
+    checkBtn.textContent = 'Check for Updates';
+    checkBtn.disabled = false;
+  });
+}
+
 function updatePresetDropdown() {
   const select = document.getElementById('presetSelect');
   select.innerHTML = '<option value="">-- New Slideshow --</option>';
@@ -4134,6 +4218,66 @@ async function loadQuickSlideBackgrounds() {
   });
 }
 
+function getQsFormState() {
+  const bgImageSelect = document.getElementById('qsBgImageSelect');
+  const bgImagePath = customQsBgImagePath || bgImageSelect.value;
+  return {
+    preset: currentQsPreset,
+    title: document.getElementById('qsTitle').value.trim(),
+    body: document.getElementById('qsBody').value.trim(),
+    elements: currentQsPreset === 'custom' ? JSON.stringify(customSlideElements) : null,
+    background: currentQsBgType === 'color' ? document.getElementById('qsBgColor').value : '#000000',
+    backgroundImage: currentQsBgType === 'image' && bgImagePath ? bgImagePath : null,
+    fontFamily: document.getElementById('qsFontFamily').value,
+    titleFontSize: parseInt(document.getElementById('qsTitleFontSize').value),
+    fontSize: parseInt(document.getElementById('qsFontSize').value),
+    fontColor: document.getElementById('qsFontColor').value,
+    backgroundDim: parseInt(document.getElementById('qsBackgroundDim').value),
+    countdownLabel: document.getElementById('qsCountdownLabel').value.trim(),
+    durationMinutes: parseInt(document.getElementById('qsCountdownMin').value) || 0,
+    durationSeconds: parseInt(document.getElementById('qsCountdownSec').value) || 0
+  };
+}
+
+function hasQsStagedChanges() {
+  if (!staged || staged.type !== 'quick-slide') {
+    const form = getQsFormState();
+    if (currentQsPreset === 'custom') {
+      return customSlideElements.length > 0;
+    } else if (currentQsPreset === 'countdown') {
+      return form.countdownLabel !== '' || form.durationMinutes > 0 || form.durationSeconds > 0;
+    } else {
+      return form.title !== '' || form.body !== '';
+    }
+  }
+  const form = getQsFormState();
+  if (form.preset !== staged.preset) return true;
+  if (form.fontFamily !== staged.fontFamily) return true;
+  if (form.titleFontSize !== staged.titleFontSize) return true;
+  if (form.fontSize !== staged.fontSize) return true;
+  if (form.fontColor !== staged.fontColor) return true;
+  if (form.background !== staged.background) return true;
+  if (form.backgroundImage !== staged.backgroundImage) return true;
+  if (form.backgroundDim !== staged.backgroundDim) return true;
+  if (currentQsPreset === 'custom') {
+    if (form.elements !== JSON.stringify(staged.elements || [])) return true;
+  } else if (currentQsPreset === 'countdown') {
+    if (form.countdownLabel !== staged.countdownLabel) return true;
+    if (form.durationMinutes !== staged.durationMinutes) return true;
+    if (form.durationSeconds !== staged.durationSeconds) return true;
+  } else {
+    if (form.title !== staged.title) return true;
+    if (form.body !== staged.body) return true;
+  }
+  return false;
+}
+
+function updateQsStageButton() {
+  const stageBtn = document.getElementById('qsStageBtn');
+  const hasChanges = hasQsStagedChanges();
+  stageBtn.classList.toggle('has-changes', hasChanges);
+}
+
 function updateQsPreview() {
   const previewArea = document.getElementById('qsPreviewArea');
   const previewTitle = document.getElementById('qsPreviewTitle');
@@ -4152,8 +4296,9 @@ function updateQsPreview() {
   const defaults = PRESET_LAYOUT_DEFAULTS[currentQsPreset] || PRESET_LAYOUT_DEFAULTS.announcement;
   const backgroundDim = parseInt(document.getElementById('qsBackgroundDim').value) || defaults.backgroundDim;
 
-  const scaledFontSize = Math.round(fontSize * 0.35);
-  const scaledTitleSize = Math.round(titleFontSize * 0.35);
+  updateFormPreviewScale();
+  const scaledFontSize = Math.round(fontSize * formPreviewScale);
+  const scaledTitleSize = Math.round(titleFontSize * formPreviewScale);
 
   if (currentQsBgType === 'image' && bgImagePath) {
     previewArea.style.backgroundImage = `url('file:///${bgImagePath.replace(/\\/g, '/')}')`;
@@ -4182,7 +4327,9 @@ function updateQsPreview() {
       if (el.type === 'title') div.classList.add('el-title');
       if (el.type === 'countdown') div.classList.add('el-countdown');
       div.style.fontFamily = el.fontFamily || fontFamily;
-      div.style.fontSize = (el.type === 'title' || el.type === 'countdown' ? scaledTitleSize : scaledFontSize) + 'px';
+      const elSize = el.fontSize || (el.type === 'title' || el.type === 'countdown' ? titleFontSize : fontSize);
+      const scaledElSize = Math.round(elSize * formPreviewScale);
+      div.style.fontSize = scaledElSize + 'px';
       div.style.color = el.fontColor || fontColor;
       const ox = el.offsetX || 0;
       const oy = el.offsetY || 0;
@@ -4277,6 +4424,8 @@ function updateQsPreview() {
     previewBody.style.maxWidth = maxWidth;
     previewBody.innerHTML = parseBodyForLists(bodyInput.value);
   }
+  
+  updateQsStageButton();
 }
 
 function escapeHtml(text) {
@@ -4409,6 +4558,7 @@ function stageQuickSlide() {
 
   updatePreviewDisplay();
   updateGoLiveButton();
+  updateQsStageButton();
 }
 
 function renderCustomElementsList() {
@@ -4601,11 +4751,34 @@ function renderCustomElementsList() {
     fontWrapper.appendChild(fontLabel);
     fontWrapper.appendChild(fontSelect);
     
+    const sizeWrapper = document.createElement('div');
+    sizeWrapper.className = 'qs-element-pos-item';
+    const sizeLabel = document.createElement('span');
+    sizeLabel.className = 'qs-element-pos-label';
+    sizeLabel.textContent = 'S';
+    const sizeSelect = document.createElement('select');
+    sizeSelect.className = 'qs-element-font';
+    const sizeOptions = ['', '36', '48', '60', '72', '84', '96', '108', '120'];
+    sizeOptions.forEach(size => {
+      const opt = document.createElement('option');
+      opt.value = size;
+      opt.textContent = size ? size + 'px' : '(Slide)';
+      if ((el.fontSize ? String(el.fontSize) : '') === size) opt.selected = true;
+      sizeSelect.appendChild(opt);
+    });
+    sizeSelect.addEventListener('change', () => {
+      customSlideElements[index].fontSize = sizeSelect.value ? parseInt(sizeSelect.value) : null;
+      updateQsPreview();
+    });
+    sizeWrapper.appendChild(sizeLabel);
+    sizeWrapper.appendChild(sizeSelect);
+    
     posRow.appendChild(vAlignSelect);
     posRow.appendChild(hAlignSelect);
     posRow.appendChild(widthSelect);
     posRow.appendChild(colorWrapper);
     posRow.appendChild(fontWrapper);
+    posRow.appendChild(sizeWrapper);
     
     const nudgeRow = document.createElement('div');
     nudgeRow.className = 'qs-element-nudge-row';
@@ -5206,7 +5379,13 @@ ipcRenderer.on(IPC.SETTINGS_UPDATED, (event, newSettings) => {
 
 ipcRenderer.on(IPC.DISPLAY_RESOLUTION_CHANGED, (event, resolution) => {
   displayResolution = resolution;
+  setPreviewAspectRatio();
+  updatePreviewScale();
+  updateFormPreviewScale();
   renderImageGrid();
+  updatePreviewDisplay();
+  updateLiveDisplay();
+  updateQsPreview();
 });
 
 ipcRenderer.on(IPC.PRESENTATION_VISIBILITY, (event, visible) => {

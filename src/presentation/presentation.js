@@ -534,7 +534,8 @@ ipcRenderer.on(IPC.SHOW_QUICK_SLIDE, (event, slide) => {
       if (el.type === 'title') div.classList.add('el-title');
       if (el.type === 'countdown') div.classList.add('el-countdown');
       div.style.fontFamily = (el.fontFamily || fontFamily) + ', serif';
-      div.style.fontSize = (el.type === 'title' || el.type === 'countdown' ? titleFontSize : fontSize) + 'px';
+      const elSize = el.fontSize || (el.type === 'title' || el.type === 'countdown' ? titleFontSize : fontSize);
+      div.style.fontSize = elSize + 'px';
       div.style.color = el.fontColor || fontColor;
       const ox = el.offsetX || 0;
       const oy = el.offsetY || 0;

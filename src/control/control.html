@@ -195,6 +195,55 @@
               <button class="btn btn-small" id="pinCurrentBtn" disabled>📌 Pin Current</button>
             </div>
           </div>
+          
+          <div class="scripture-style-section">
+            <div class="scripture-style-row">
+              <div class="scripture-style-item">
+                <label for="scriptureFontFamily">Font</label>
+                <select id="scriptureFontFamily" class="select-input">
+                  <option value="Georgia">Georgia</option>
+                  <option value="Times New Roman">Times New Roman</option>
+                  <option value="Arial">Arial</option>
+                  <option value="Verdana">Verdana</option>
+                  <option value="Roboto">Roboto</option>
+                </select>
+              </div>
+              <div class="scripture-style-item">
+                <label for="scriptureFontSize">Size</label>
+                <select id="scriptureFontSize" class="select-input">
+                  <option value="24">24px</option>
+                  <option value="36">36px</option>
+                  <option value="48" selected>48px</option>
+                  <option value="60">60px</option>
+                  <option value="72">72px</option>
+                  <option value="84">84px</option>
+                  <option value="96">96px</option>
+                </select>
+              </div>
+              <div class="scripture-style-item">
+                <label for="scriptureFontColor">Color</label>
+                <input type="color" id="scriptureFontColor" value="#FFFFFF">
+              </div>
+            </div>
+            <div class="scripture-bg-row">
+              <label>Background</label>
+              <div class="scripture-bg-controls">
+                <div class="scripture-bg-toggle">
+                  <button class="scripture-bg-btn active" data-bg-type="color">Color</button>
+                  <button class="scripture-bg-btn" data-bg-type="image">Image</button>
+                </div>
+                <div class="scripture-bg-color-group" id="scriptureBgColorGroup">
+                  <input type="color" id="scriptureBackground" value="#000000">
+                </div>
+                <div class="scripture-bg-image-group" id="scriptureBgImageGroup" style="display: none;">
+                  <select id="scriptureBackgroundSelect" class="select-input">
+                    <option value="">-- Select --</option>
+                  </select>
+                  <button class="btn btn-small" id="pickScriptureBackground">Browse...</button>
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
         
         <section class="mode-panel" data-panel="quick-slides">
@@ -413,57 +462,18 @@
             <p class="settings-hint">Get a free key at <a href="https://scripture.api.bible/signup" id="apiSignupLink">scripture.api.bible/signup</a></p>
           </div>
           
-          <h3 class="settings-section-title">Scripture Display</h3>
-          <div class="settings-group">
-            <label for="scriptureFontFamily">Font</label>
-            <select id="scriptureFontFamily" class="select-input">
-              <option value="Georgia">Georgia (Serif)</option>
-              <option value="Times New Roman">Times New Roman (Serif)</option>
-              <option value="Arial">Arial (Sans-serif)</option>
-              <option value="Verdana">Verdana (Sans-serif)</option>
-              <option value="Roboto">Roboto (Sans-serif)</option>
-            </select>
-          </div>
-          <div class="settings-group">
-            <label for="scriptureFontSize">Font Size: <span id="fontSizeValue">48</span>px</label>
-            <input type="range" id="scriptureFontSize" class="slider-input" min="24" max="96" value="48">
-          </div>
-          <div class="settings-group">
-            <label for="scriptureFontColor">Text Color</label>
-            <div class="color-input-group">
-              <input type="color" id="scriptureFontColor" value="#FFFFFF">
-              <span class="color-preview" id="fontColorPreview">#FFFFFF</span>
-            </div>
-          </div>
-          <div class="settings-group">
-            <label>Background Type</label>
-            <div class="background-type-toggle">
-              <button class="bg-type-btn active" data-type="color">Solid Color</button>
-              <button class="bg-type-btn" data-type="image">Image</button>
-            </div>
-          </div>
-          <div class="settings-group bg-color-group">
-            <label for="scriptureBackground">Background Color</label>
-            <div class="color-input-group">
-              <input type="color" id="scriptureBackground" value="#000000">
-              <span class="color-preview" id="bgColorPreview">#000000</span>
-            </div>
-          </div>
-          <div class="settings-group bg-image-group" style="display: none;">
-            <label for="scriptureBackgroundSelect">Background Image</label>
-            <select id="scriptureBackgroundSelect" class="select-input">
-              <option value="">-- Select --</option>
-            </select>
-            <div class="custom-bg-row" id="customBgRow" style="display: none;">
-              <input type="text" id="scriptureBackgroundImagePath" readonly placeholder="Select an image...">
-              <button class="btn btn-small" id="pickScriptureBackground">Browse</button>
-            </div>
-          </div>
-          
           <h3 class="settings-section-title">Storage</h3>
           <div class="settings-group">
             <label>Media Library Storage</label>
             <div class="storage-display" id="storageDisplay">Calculating...</div>
+          </div>
+          
+          <h3 class="settings-section-title">App Updates</h3>
+          <div class="settings-group">
+            <div class="update-check-row">
+              <button class="btn" id="checkUpdatesBtn">Check for Updates</button>
+              <span class="update-check-status" id="updateCheckStatus"></span>
+            </div>
           </div>
         </section>
       </div>
