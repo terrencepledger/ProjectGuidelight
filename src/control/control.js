@@ -67,6 +67,14 @@ function getEffectivePath(file) {
   return file.internalPath || file.originalPath || file.path;
 }
 
+function getLuminance(hexColor) {
+  const hex = hexColor.replace('#', '');
+  const r = parseInt(hex.substr(0, 2), 16) / 255;
+  const g = parseInt(hex.substr(2, 2), 16) / 255;
+  const b = parseInt(hex.substr(4, 2), 16) / 255;
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
 function getMediaThumbnailId(file) {
   if (file.id) return file.id;
   const filePath = file.path || file.originalPath || '';
@@ -267,10 +275,30 @@ async function fetchAndCacheChapter(bibleId, bookId, chapter) {
   }
   
   const result = await ipcRenderer.invoke(IPC.FETCH_CHAPTER, { bibleId, bookId, chapter });
+  
   if (!result.error) {
     chapterCache.set(key, result);
+    persistScriptureCache();
+    return result;
   }
+  
+  if (result.isApiError) {
+    const backupResult = await ipcRenderer.invoke(IPC.FETCH_CHAPTER_BACKUP, { bibleId, bookId, chapter });
+    if (!backupResult.error) {
+      chapterCache.set(key, backupResult);
+      persistScriptureCache();
+      return backupResult;
+    }
+  }
+  
   return result;
+}
+
+function persistScriptureCache() {
+  const cacheObj = Object.fromEntries(chapterCache);
+  ipcRenderer.invoke(IPC.SAVE_SCRIPTURE_CACHE, cacheObj).catch(err => {
+    console.error('Failed to persist scripture cache:', err);
+  });
 }
 
 function prefetchNearbyChapter(bibleId, bookId, chapter, verse, bibleId2) {
@@ -348,6 +376,11 @@ async function init() {
   setPreviewAspectRatio();
   slideshowPresets = await ipcRenderer.invoke(IPC.GET_SLIDESHOW_PRESETS);
   quickSlides = await ipcRenderer.invoke(IPC.GET_QUICK_SLIDES);
+  
+  const savedCache = await ipcRenderer.invoke(IPC.GET_SCRIPTURE_CACHE);
+  for (const [key, value] of Object.entries(savedCache)) {
+    chapterCache.set(key, value);
+  }
   
   const appVersion = await ipcRenderer.invoke(IPC.GET_APP_VERSION);
   document.getElementById('versionInfo').textContent = `v${appVersion}`;
@@ -837,20 +870,25 @@ function updatePreviewDisplay() {
     const fontFamily = settings.scriptureFontFamily || 'Georgia';
     const fontSize = settings.scriptureFontSize || 48;
     const fontColor = settings.scriptureFontColor || '#FFFFFF';
-    
-    const previewFontSize = Math.round(fontSize * previewScale);
-    const previewRefSize = Math.round(previewFontSize * 0.5);
+    const refSize = Math.round(fontSize * 0.5);
     
     let bgStyle = bgImage 
       ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
       : `background-color: ${bg};`;
     
-    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor};`;
-    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${previewRefSize}px; color: ${fontColor}; opacity: 0.7;`;
+    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${fontSize}px; color: ${fontColor}; line-height: 1.4; margin-bottom: 1rem;`;
+    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${refSize}px; color: ${fontColor}; opacity: 0.7; font-style: italic;`;
+    const backdropClass = bgImage ? (' scripture-backdrop' + (getLuminance(fontColor) <= 0.5 ? ' light' : '')) : '';
     
     const compareHtml = staged.compareText ? 
-      `<div class="scripture-compare-preview"><div class="scripture-text" style="${textStyle}">${staged.compareText}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div>` : '';
-    previewEl.innerHTML = `<div class="preview-frame"><div class="scripture-preview ${staged.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-ref" style="${refStyle}">${staged.reference} (${staged.version})</div></div>${compareHtml}</div></div>`;
+      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${staged.compareText}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div></div>` : '';
+    
+    const virtualWidth = displayResolution.width;
+    const virtualHeight = displayResolution.height;
+    const scaledWidth = virtualWidth * previewScale;
+    const scaledHeight = virtualHeight * previewScale;
+    
+    previewEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.version})</div></div></div>${compareHtml}</div></div>`;
     cleanupPreviewVideo();
     cleanupPreviewAudio();
   } else if (staged.type === 'quick-slide') {
@@ -1025,20 +1063,25 @@ function updateLiveDisplay() {
     const fontFamily = live.liveFontFamily || 'Georgia';
     const fontSize = live.liveFontSize || 48;
     const fontColor = live.liveFontColor || '#FFFFFF';
-
-    const previewFontSize = Math.round(fontSize * previewScale);
-    const previewRefSize = Math.round(previewFontSize * 0.5);
+    const refSize = Math.round(fontSize * 0.5);
 
     let bgStyle = bgImage
-      ? `background: url('file:///${bgImage}') center/cover no-repeat;`
-      : `background: ${bg};`;
+      ? `background-image: url('file:///${bgImage}'); background-size: cover; background-position: center;`
+      : `background-color: ${bg};`;
 
-    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${previewFontSize}px; color: ${fontColor};`;
-    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${previewRefSize}px; color: ${fontColor}; opacity: 0.7;`;
+    const textStyle = `font-family: ${fontFamily}, serif; font-size: ${fontSize}px; color: ${fontColor}; line-height: 1.4; margin-bottom: 1rem;`;
+    const refStyle = `font-family: ${fontFamily}, serif; font-size: ${refSize}px; color: ${fontColor}; opacity: 0.7; font-style: italic;`;
+    const backdropClass = bgImage ? (' scripture-backdrop' + (getLuminance(fontColor) <= 0.5 ? ' light' : '')) : '';
 
     const compareHtml = live.compareText ?
-      `<div class="scripture-compare-preview"><div class="scripture-text" style="${textStyle}">${live.compareText}</div><div class="scripture-ref" style="${refStyle}">${live.reference} (${live.compareVersion})</div></div>` : '';
-    liveEl.innerHTML = `<div class="preview-frame"><div class="scripture-preview ${live.compareText ? 'compare-mode' : ''}" style="${bgStyle}"><div class="scripture-main-preview"><div class="scripture-text" style="${textStyle}">${live.text}</div><div class="scripture-ref" style="${refStyle}">${live.reference} (${live.version})</div></div>${compareHtml}</div></div>`;
+      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${live.compareText}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.compareVersion})</div></div></div>` : '';
+    
+    const virtualWidth = displayResolution.width;
+    const virtualHeight = displayResolution.height;
+    const scaledWidth = virtualWidth * previewScale;
+    const scaledHeight = virtualHeight * previewScale;
+    
+    liveEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${live.text}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.version})</div></div></div>${compareHtml}</div></div>`;
   } else if (live.type === 'quick-slide') {
     const bg = live.background || '#000000';
     const bgImage = live.backgroundImage ? live.backgroundImage.replace(/\\/g, '/') : null;
@@ -2223,6 +2266,12 @@ function setupVideoTransportControls() {
     }
     renderImageGrid();
   });
+  
+  const liveLoopCheckbox = document.getElementById('liveVideoLoop');
+  
+  liveLoopCheckbox.addEventListener('change', () => {
+    ipcRenderer.send(IPC.CONTROL_VIDEO, 'loop', liveLoopCheckbox.checked);
+  });
 }
 
 function setupAudioTransportControls() {
@@ -2344,6 +2393,12 @@ function setupAudioTransportControls() {
         updatePreviewAudioUI();
       }
     }
+  });
+  
+  const liveLoopCheckbox = document.getElementById('liveAudioLoop');
+  
+  liveLoopCheckbox.addEventListener('change', () => {
+    ipcRenderer.send(IPC.CONTROL_AUDIO, 'loop', liveLoopCheckbox.checked);
   });
 }
 

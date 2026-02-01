@@ -1,6 +1,6 @@
 {
   "name": "guidelight",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Church presentation control system for Greater Pentecostal Temple",
   "main": "main.js",
   "scripts": {

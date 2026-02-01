@@ -361,6 +361,68 @@ const VERSION_NAMES = {
   '592420522e16049f-01': 'RVR09'
 };
 
+const BACKUP_VERSION_MAP = {
+  'de4e12af7f28f599-02': 'kjv',
+  '06125adad2d5898a-01': 'asv',
+  '9879dbb7cfe39e4d-04': 'web',
+  '592420522e16049f-01': 'rvr1909'
+};
+
+async function fetchChapterFromBackup(bibleId, bookId, chapter) {
+  const bookName = BOOK_NAMES[bookId];
+  if (!bookName) {
+    return { error: 'Unknown book' };
+  }
+  
+  const backupVersion = BACKUP_VERSION_MAP[bibleId];
+  if (!backupVersion) {
+    return { error: 'Version not available in backup API' };
+  }
+  
+  const formattedBook = bookName.toLowerCase().replace(/ /g, '+');
+  const url = `https://bible-api.com/${formattedBook}+${chapter}?translation=${backupVersion}`;
+  
+  try {
+    const response = await fetch(url);
+    
+    if (!response.ok) {
+      if (response.status === 404) {
+        return { error: 'Chapter not found in backup' };
+      }
+      return { error: `Backup API error: ${response.status}`, isApiError: true };
+    }
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      return { error: data.error };
+    }
+    
+    if (!data.verses || !Array.isArray(data.verses)) {
+      return { error: 'Invalid response from backup API' };
+    }
+    
+    const verses = {};
+    for (const v of data.verses) {
+      if (v.verse && v.text) {
+        verses[v.verse] = v.text.trim();
+      }
+    }
+    
+    return {
+      bookId,
+      chapter,
+      verses,
+      version: VERSION_NAMES[bibleId] || backupVersion.toUpperCase(),
+      verseCount: Object.keys(verses).length,
+      source: 'bible-api.com'
+    };
+  } catch (err) {
+    console.error('Backup API fetch error:', err);
+    return { error: 'Failed to fetch from backup API', isNetworkError: true };
+  }
+}
+
 function parseScriptureReference(reference) {
   const cleaned = reference.trim().toLowerCase();
   const match = cleaned.match(/^(\d?\s*[a-z]+)\s*(\d+)[\s:.,]+(\d+)$/i);
@@ -396,17 +458,19 @@ async function fetchVerse(apiKey, bibleId, verseId) {
     if (response.status === 404) {
       return { error: 'Verse not found' };
     }
-    return { error: `API error: ${response.status}` };
+    const isApiError = [401, 403, 500, 502, 503].includes(response.status);
+    return { error: `API error: ${response.status}`, isApiError, status: response.status };
   }
   
   const data = await response.json();
   if (data.data) {
     return {
       text: data.data.content.trim(),
-      version: VERSION_NAMES[bibleId] || bibleId
+      version: VERSION_NAMES[bibleId] || bibleId,
+      source: 'api.bible'
     };
   }
-  return { error: 'Invalid response from API' };
+  return { error: 'Invalid response from API', isApiError: true };
 }
 
 function setupIPC() {
@@ -939,14 +1003,14 @@ function setupIPC() {
       return response;
     } catch (err) {
       console.error('Scripture fetch error:', err);
-      return { error: 'Failed to fetch scripture. Check internet connection.' };
+      return { error: 'Failed to fetch scripture. Check internet connection.', isNetworkError: true };
     }
   });
 
   ipcMain.handle(IPC.FETCH_CHAPTER, async (event, { bibleId, bookId, chapter }) => {
     const apiKey = settings.bibleApiKey || process.env.BIBLE_API_KEY;
     if (!apiKey) {
-      return { error: 'API key not configured' };
+      return { error: 'API key not configured', isApiError: true };
     }
 
     const chapterId = `${bookId}.${chapter}`;
@@ -961,12 +1025,13 @@ function setupIPC() {
         if (response.status === 404) {
           return { error: 'Chapter not found' };
         }
-        return { error: `API error: ${response.status}` };
+        const isApiError = [401, 403, 500, 502, 503].includes(response.status);
+        return { error: `API error: ${response.status}`, isApiError, status: response.status };
       }
       
       const data = await response.json();
       if (!data.data || !data.data.content) {
-        return { error: 'Invalid chapter response' };
+        return { error: 'Invalid chapter response', isApiError: true };
       }
       
       const content = data.data.content;
@@ -986,11 +1051,12 @@ function setupIPC() {
         chapter,
         verses,
         version: VERSION_NAMES[bibleId] || bibleId,
-        verseCount: Object.keys(verses).length
+        verseCount: Object.keys(verses).length,
+        source: 'api.bible'
       };
     } catch (err) {
       console.error('Chapter fetch error:', err);
-      return { error: 'Failed to fetch chapter' };
+      return { error: 'Failed to fetch chapter. Check internet connection.', isNetworkError: true };
     }
   });
 
@@ -1090,6 +1156,35 @@ function setupIPC() {
     } catch (err) {
       return { error: 'Network error' };
     }
+  });
+
+  ipcMain.handle(IPC.GET_SCRIPTURE_CACHE, async () => {
+    try {
+      const cachePath = path.join(app.getPath('userData'), 'scripture-cache.json');
+      if (fs.existsSync(cachePath)) {
+        const data = fs.readFileSync(cachePath, 'utf-8');
+        return JSON.parse(data);
+      }
+      return {};
+    } catch (err) {
+      console.error('Error loading scripture cache:', err);
+      return {};
+    }
+  });
+
+  ipcMain.handle(IPC.SAVE_SCRIPTURE_CACHE, async (event, cacheData) => {
+    try {
+      const cachePath = path.join(app.getPath('userData'), 'scripture-cache.json');
+      fs.writeFileSync(cachePath, JSON.stringify(cacheData, null, 2));
+      return true;
+    } catch (err) {
+      console.error('Error saving scripture cache:', err);
+      return false;
+    }
+  });
+
+  ipcMain.handle(IPC.FETCH_CHAPTER_BACKUP, async (event, { bibleId, bookId, chapter }) => {
+    return fetchChapterFromBackup(bibleId, bookId, chapter);
   });
 }
 

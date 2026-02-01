@@ -303,6 +303,9 @@ ipcRenderer.on(IPC.CONTROL_VIDEO, (event, command, value) => {
       video.currentTime = value;
       sendVideoState();
       break;
+    case 'loop':
+      video.loop = value;
+      break;
   }
 });
 
@@ -359,6 +362,9 @@ ipcRenderer.on(IPC.CONTROL_AUDIO, (event, command, value) => {
     case 'seek':
       audio.currentTime = value;
       sendAudioState();
+      break;
+    case 'loop':
+      audio.loop = value;
       break;
   }
 });

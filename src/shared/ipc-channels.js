@@ -64,7 +64,10 @@ const IPC_CHANNELS = {
   COPY_MEDIA_FILE: 'copy-media-file',
   MEDIA_COPY_PROGRESS: 'media-copy-progress',
   MEDIA_COPY_COMPLETE: 'media-copy-complete',
-  GET_MEDIA_STORAGE_SIZE: 'get-media-storage-size'
+  GET_MEDIA_STORAGE_SIZE: 'get-media-storage-size',
+  GET_SCRIPTURE_CACHE: 'get-scripture-cache',
+  SAVE_SCRIPTURE_CACHE: 'save-scripture-cache',
+  FETCH_CHAPTER_BACKUP: 'fetch-chapter-backup'
 };
 
 if (typeof module !== 'undefined') {
