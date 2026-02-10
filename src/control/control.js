@@ -255,6 +255,12 @@ function createSlideElement({ type, text, verticalAlign, horizontalAlign, textWi
   };
 }
 
+function renderScriptureText(text) {
+  if (!text) return '';
+  let safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return safe.replace(/&lt;wj&gt;/g, '<span class="wj">').replace(/&lt;\/wj&gt;/g, '</span>');
+}
+
 function getCacheKey(bibleId, bookId, chapter) {
   return `${bibleId}:${bookId}.${chapter}`;
 }
@@ -296,6 +302,7 @@ async function fetchAndCacheChapter(bibleId, bookId, chapter) {
 
 function persistScriptureCache() {
   const cacheObj = Object.fromEntries(chapterCache);
+  cacheObj.__cacheVersion = 3;
   ipcRenderer.invoke(IPC.SAVE_SCRIPTURE_CACHE, cacheObj).catch(err => {
     console.error('Failed to persist scripture cache:', err);
   });
@@ -378,8 +385,12 @@ async function init() {
   quickSlides = await ipcRenderer.invoke(IPC.GET_QUICK_SLIDES);
   
   const savedCache = await ipcRenderer.invoke(IPC.GET_SCRIPTURE_CACHE);
-  for (const [key, value] of Object.entries(savedCache)) {
-    chapterCache.set(key, value);
+  if (savedCache.__cacheVersion >= 3) {
+    for (const [key, value] of Object.entries(savedCache)) {
+      if (key !== '__cacheVersion') {
+        chapterCache.set(key, value);
+      }
+    }
   }
   
   const appVersion = await ipcRenderer.invoke(IPC.GET_APP_VERSION);
@@ -881,14 +892,14 @@ function updatePreviewDisplay() {
     const backdropClass = bgImage ? (' scripture-backdrop' + (getLuminance(fontColor) <= 0.5 ? ' light' : '')) : '';
     
     const compareHtml = staged.compareText ? 
-      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${staged.compareText}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div></div>` : '';
+      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${renderScriptureText(staged.compareText)}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.compareVersion})</div></div></div>` : '';
     
     const virtualWidth = displayResolution.width;
     const virtualHeight = displayResolution.height;
     const scaledWidth = virtualWidth * previewScale;
     const scaledHeight = virtualHeight * previewScale;
     
-    previewEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${staged.text}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.version})</div></div></div>${compareHtml}</div></div>`;
+    previewEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${renderScriptureText(staged.text)}</div><div class="scripture-reference" style="${refStyle}">${staged.reference} (${staged.version})</div></div></div>${compareHtml}</div></div>`;
     cleanupPreviewVideo();
     cleanupPreviewAudio();
   } else if (staged.type === 'quick-slide') {
@@ -1074,14 +1085,14 @@ function updateLiveDisplay() {
     const backdropClass = bgImage ? (' scripture-backdrop' + (getLuminance(fontColor) <= 0.5 ? ' light' : '')) : '';
 
     const compareHtml = live.compareText ?
-      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${live.compareText}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.compareVersion})</div></div></div>` : '';
+      `<div class="scripture-compare visible"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${renderScriptureText(live.compareText)}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.compareVersion})</div></div></div>` : '';
     
     const virtualWidth = displayResolution.width;
     const virtualHeight = displayResolution.height;
     const scaledWidth = virtualWidth * previewScale;
     const scaledHeight = virtualHeight * previewScale;
     
-    liveEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${live.text}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.version})</div></div></div>${compareHtml}</div></div>`;
+    liveEl.innerHTML = `<div class="preview-frame" style="width: ${scaledWidth}px; height: ${scaledHeight}px;"><div class="scripture-virtual-frame" style="width: ${virtualWidth}px; height: ${virtualHeight}px; ${bgStyle} transform: scale(${previewScale}); transform-origin: top left;"><div class="scripture-content"><div class="scripture-text-wrapper${backdropClass}"><div class="scripture-text" style="${textStyle}">${renderScriptureText(live.text)}</div><div class="scripture-reference" style="${refStyle}">${live.reference} (${live.version})</div></div></div>${compareHtml}</div></div>`;
   } else if (live.type === 'quick-slide') {
     const bg = live.background || '#000000';
     const bgImage = live.backgroundImage ? live.backgroundImage.replace(/\\/g, '/') : null;
@@ -2413,7 +2424,7 @@ function setupScriptureControls() {
       compareVersionRow.classList.remove('visible');
     }
   });
-  
+
   const scriptureTextInput = document.getElementById('scriptureTextInput');
   const parsePreview = document.getElementById('parsePreview');
   const lookupTextBtn = document.getElementById('lookupTextBtn');

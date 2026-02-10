@@ -262,6 +262,10 @@ body {
   margin-bottom: 1rem;
 }
 
+.wj {
+  color: #CC0000;
+}
+
 .scripture-reference {
   font-size: 24px;
   color: rgba(255, 255, 255, 0.7);

@@ -1855,6 +1855,10 @@ input[type="checkbox"] {
   color: #888;
 }
 
+.wj {
+  color: #CC0000;
+}
+
 .compare-row {
   display: none;
 }

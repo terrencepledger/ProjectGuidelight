@@ -12,6 +12,12 @@ let audioUpdateInterval = null;
 let countdownInterval = null;
 let defaultStandbyPath = null;
 
+function renderScriptureText(text) {
+  if (!text) return '';
+  let safe = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return safe.replace(/&lt;wj&gt;/g, '<span class="wj">').replace(/&lt;\/wj&gt;/g, '</span>');
+}
+
 function parseBodyForLists(text) {
   if (!text) return '';
   const lines = text.split('\n');
@@ -385,15 +391,15 @@ ipcRenderer.on(IPC.SHOW_SCRIPTURE, (event, scripture) => {
   const nextText2 = nextLayer.querySelector('.scripture-compare .scripture-text');
   const nextRef2 = nextLayer.querySelector('.scripture-compare .scripture-reference');
   
-  nextText.textContent = scripture.text;
+  nextText.innerHTML = renderScriptureText(scripture.text);
   nextRef.textContent = `${scripture.reference} (${scripture.version})`;
   
   if (scripture.compareText) {
-    nextText2.textContent = scripture.compareText;
+    nextText2.innerHTML = renderScriptureText(scripture.compareText);
     nextRef2.textContent = `${scripture.reference} (${scripture.compareVersion})`;
     nextCompare.classList.add('visible');
   } else {
-    nextText2.textContent = '';
+    nextText2.innerHTML = '';
     nextRef2.textContent = '';
     nextCompare.classList.remove('visible');
   }

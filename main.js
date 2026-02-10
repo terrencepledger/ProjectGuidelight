@@ -362,60 +362,69 @@ const VERSION_NAMES = {
 };
 
 const BACKUP_VERSION_MAP = {
-  'de4e12af7f28f599-02': 'kjv',
-  '06125adad2d5898a-01': 'asv',
-  '9879dbb7cfe39e4d-04': 'web',
-  '592420522e16049f-01': 'rvr1909'
+  'de4e12af7f28f599-02': 'eng_kjv',
+  '06125adad2d5898a-01': 'eng_asv',
+  '9879dbb7cfe39e4d-04': 'ENGWEBP',
+  '592420522e16049f-01': 'spa_r09'
 };
 
-async function fetchChapterFromBackup(bibleId, bookId, chapter) {
-  const bookName = BOOK_NAMES[bookId];
-  if (!bookName) {
-    return { error: 'Unknown book' };
+function parseBackupVerseContent(contentArray) {
+  let text = '';
+  for (const item of contentArray) {
+    if (typeof item === 'string') {
+      text += item;
+    } else if (item && item.text) {
+      if (item.wordsOfJesus) {
+        text += '<wj>' + item.text + '</wj>';
+      } else {
+        text += item.text;
+      }
+    }
   }
-  
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+async function fetchChapterFromBackup(bibleId, bookId, chapter) {
   const backupVersion = BACKUP_VERSION_MAP[bibleId];
   if (!backupVersion) {
     return { error: 'Version not available in backup API' };
   }
-  
-  const formattedBook = bookName.toLowerCase().replace(/ /g, '+');
-  const url = `https://bible-api.com/${formattedBook}+${chapter}?translation=${backupVersion}`;
-  
+
+  const url = `https://bible.helloao.org/api/${backupVersion}/${bookId}/${chapter}.json`;
+
   try {
     const response = await fetch(url);
-    
+
     if (!response.ok) {
       if (response.status === 404) {
         return { error: 'Chapter not found in backup' };
       }
       return { error: `Backup API error: ${response.status}`, isApiError: true };
     }
-    
+
     const data = await response.json();
-    
-    if (data.error) {
-      return { error: data.error };
-    }
-    
-    if (!data.verses || !Array.isArray(data.verses)) {
+
+    if (!data.chapter || !data.chapter.content) {
       return { error: 'Invalid response from backup API' };
     }
-    
+
     const verses = {};
-    for (const v of data.verses) {
-      if (v.verse && v.text) {
-        verses[v.verse] = v.text.trim();
+    for (const item of data.chapter.content) {
+      if (item.type === 'verse' && item.number && item.content) {
+        const verseText = parseBackupVerseContent(item.content);
+        if (verseText) {
+          verses[item.number] = verseText;
+        }
       }
     }
-    
+
     return {
       bookId,
       chapter,
       verses,
-      version: VERSION_NAMES[bibleId] || backupVersion.toUpperCase(),
+      version: VERSION_NAMES[bibleId] || backupVersion,
       verseCount: Object.keys(verses).length,
-      source: 'bible-api.com'
+      source: 'bible.helloao.org'
     };
   } catch (err) {
     console.error('Backup API fetch error:', err);
@@ -447,8 +456,38 @@ function parseScriptureReference(reference) {
   };
 }
 
+function parseHtmlToWjText(html) {
+  let text = html;
+  text = text.replace(/<span\s+class="wj">([\s\S]*?)<\/span>/gi, '<wj>$1</wj>');
+  text = text.replace(/<(?!\/?wj>)[^>]+>/g, '');
+  text = text.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ').replace(/&quot;/g, '"');
+  text = text.replace(/\s+/g, ' ').trim();
+  return text;
+}
+
+function parseChapterHtml(html) {
+  const verses = {};
+  const parts = html.split(/<span\s+data-number="\d+"\s+data-sid="[^"]*"\s+class="v">\d+<\/span>/);
+  const verseNums = [];
+  const versePattern = /<span\s+data-number="(\d+)"\s+data-sid="[^"]*"\s+class="v">\d+<\/span>/g;
+  let match;
+  while ((match = versePattern.exec(html)) !== null) {
+    verseNums.push(parseInt(match[1], 10));
+  }
+  for (let i = 0; i < verseNums.length; i++) {
+    const verseHtml = parts[i + 1];
+    if (verseHtml) {
+      const verseText = parseHtmlToWjText(verseHtml);
+      if (verseText) {
+        verses[verseNums[i]] = verseText;
+      }
+    }
+  }
+  return verses;
+}
+
 async function fetchVerse(apiKey, bibleId, verseId) {
-  const url = `https://rest.api.bible/v1/bibles/${bibleId}/verses/${verseId}?content-type=text&include-notes=false&include-titles=false&include-chapter-numbers=false&include-verse-numbers=false`;
+  const url = `https://rest.api.bible/v1/bibles/${bibleId}/verses/${verseId}?content-type=html&include-notes=false&include-titles=false&include-chapter-numbers=false&include-verse-numbers=false`;
   
   const response = await fetch(url, {
     headers: { 'api-key': apiKey }
@@ -465,7 +504,7 @@ async function fetchVerse(apiKey, bibleId, verseId) {
   const data = await response.json();
   if (data.data) {
     return {
-      text: data.data.content.trim(),
+      text: parseHtmlToWjText(data.data.content),
       version: VERSION_NAMES[bibleId] || bibleId,
       source: 'api.bible'
     };
@@ -1017,7 +1056,7 @@ function setupIPC() {
     
     try {
       const response = await fetch(
-        `https://rest.api.bible/v1/bibles/${bibleId}/chapters/${chapterId}?content-type=text&include-verse-numbers=true`,
+        `https://rest.api.bible/v1/bibles/${bibleId}/chapters/${chapterId}?content-type=html&include-verse-numbers=true`,
         { headers: { 'api-key': apiKey } }
       );
       
@@ -1035,16 +1074,7 @@ function setupIPC() {
       }
       
       const content = data.data.content;
-      const verses = {};
-      const versePattern = /\[(\d+)\]\s*([^\[]*)/g;
-      let match;
-      while ((match = versePattern.exec(content)) !== null) {
-        const verseNum = parseInt(match[1], 10);
-        const verseText = match[2].trim();
-        if (verseText) {
-          verses[verseNum] = verseText;
-        }
-      }
+      const verses = parseChapterHtml(content);
       
       return {
         bookId,
